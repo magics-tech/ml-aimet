@@ -6,6 +6,8 @@
 ```
 sim = QuantizationSimModel(model_int8, rounding_mode='floor', scaling_mode='pow2', dummy_input=dummy_input, **kwargs)
 ```
+3. Test the QAT, the code can work, but havent checked the model accuracy (too slow for imagenet). (07/11/2022)
+4. QAT supported, verified. (07/11/2022)
 
 ## How to compile
 Follow the instruction from the original AIMET github (https://github.com/quic/aimet/blob/develop/packaging/docker_install.md). Here we use Docker in order to have root.
