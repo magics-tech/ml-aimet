@@ -86,7 +86,14 @@ PYBIND11_MODULE(libpymo, m)
     py::enum_<RoundingMode>(m, "RoundingMode")
         .value("ROUND_NEAREST", RoundingMode::ROUND_NEAREST)
         .value("ROUND_STOCHASTIC", RoundingMode::ROUND_STOCHASTIC)
+        .value("ROUND_FLOOR", RoundingMode::ROUND_FLOOR)
         .export_values();
+
+    py::enum_<ScalingMode>(m, "ScalingMode")
+        .value("SCALE_POW2", ScalingMode::SCALE_POW2)
+        .value("SCALE_ORI", ScalingMode::SCALE_ORI)
+        .export_values();
+
 
     py::class_<DlQuantization::TfEncoding>(m, "TfEncoding")
         .def(py::init<>())
@@ -141,10 +148,10 @@ PYBIND11_MODULE(libpymo, m)
     py::class_<DlQuantization::TensorQuantizationSimForPython>(m, "TensorQuantizationSimForPython")
         .def(py::init<>())
         .def("quantizeDequantize", (py::array_t<float>(TensorQuantizationSimForPython::*)(py::array_t<float>,
-                DlQuantization::TfEncoding&, DlQuantization::RoundingMode, unsigned int, bool))
+                DlQuantization::TfEncoding&, DlQuantization::RoundingMode, DlQuantization::ScalingMode, unsigned int, bool))
                 &DlQuantization::TensorQuantizationSimForPython::quantizeDequantize)
         .def("quantizeDequantize", (py::array_t<float>(TensorQuantizationSimForPython::*)(py::array_t<float>,
-                DlQuantization::TfEncoding&, DlQuantization::RoundingMode, bool))
+                DlQuantization::TfEncoding&, DlQuantization::RoundingMode, DlQuantization::ScalingMode, bool))
                 &DlQuantization::TensorQuantizationSimForPython::quantizeDequantize);
 
     py::enum_<DlQuantization::TensorQuantizerOpMode>(m, "TensorQuantizerOpMode")
@@ -154,7 +161,7 @@ PYBIND11_MODULE(libpymo, m)
         .value("passThrough", DlQuantization::TensorQuantizerOpMode::passThrough);
 
     py::class_<DlQuantization::PyTensorQuantizer>(m, "TensorQuantizer")
-        .def(py::init<DlQuantization::QuantizationMode, DlQuantization::RoundingMode>())
+        .def(py::init<DlQuantization::QuantizationMode, DlQuantization::RoundingMode, DlQuantization::ScalingMode>())
         .def("updateStats",
              (void (PyTensorQuantizer::*)(py::array_t<float>, bool)) & DlQuantization::PyTensorQuantizer::updateStats)
         .def("computeEncoding",  &DlQuantization::PyTensorQuantizer::computeEncoding)
@@ -168,7 +175,6 @@ PYBIND11_MODULE(libpymo, m)
         .def("setUnsignedSymmetric", &DlQuantization::PyTensorQuantizer::setUnsignedSymmetric)
         .def("getUnsignedSymmetric", &DlQuantization::PyTensorQuantizer::getUnsignedSymmetric)
         .def("getStatsHistogram", &DlQuantization::PyTensorQuantizer::getStatsHistogram)
-        .def("computePartialEncoding", &DlQuantization::PyTensorQuantizer::computePartialEncoding)
         .def_readwrite("roundingMode", &DlQuantization::PyTensorQuantizer::roundingMode)
         .def_readwrite("isEncodingValid", &DlQuantization::PyTensorQuantizer::isEncodingValid);
 

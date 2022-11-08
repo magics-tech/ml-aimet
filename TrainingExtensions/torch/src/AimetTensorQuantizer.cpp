@@ -118,7 +118,7 @@ public:
 
 
     at::Tensor quantizeDequantize(at::Tensor input, DlQuantization::TfEncoding& encoding,
-                                  DlQuantization::RoundingMode roundingMode, bool use_cuda)
+                                  DlQuantization::RoundingMode roundingMode, DlQuantization::ScalingMode scalingMode, bool use_cuda)
     {
         // Allocate an output tensor as the same shape as the input
         at::Tensor output = input;
@@ -129,13 +129,13 @@ public:
             inputTensorSize *= size;
 
         _tensorQuantizationSim->quantizeDequantizeTensor(input.data<float>(), inputTensorSize, output.data<float>(),
-                                                         encoding.min, encoding.max, encoding.bw, roundingMode, use_cuda);
+                                                         encoding.min, encoding.max, encoding.bw, roundingMode, scalingMode, use_cuda);
 
         return output;
     }
 
     at::Tensor quantize(at::Tensor input, DlQuantization::TfEncoding& encoding,
-                        DlQuantization::RoundingMode roundingMode, bool use_cuda, bool shiftToSigned)
+                        DlQuantization::RoundingMode roundingMode,  DlQuantization::ScalingMode scalingMode, bool use_cuda, bool shiftToSigned)
     {
         // Allocate an output tensor as the same shape as the input
         at::Tensor output = input;
@@ -146,7 +146,7 @@ public:
             inputTensorSize *= size;
 
         _tensorQuantizationSim->quantizeTensor(input.data<float>(), inputTensorSize, output.data<float>(), encoding.min,
-                                               encoding.max, encoding.bw, roundingMode, use_cuda, shiftToSigned);
+                                               encoding.max, encoding.bw, roundingMode, scalingMode, use_cuda, shiftToSigned);
 
         return output;
     }

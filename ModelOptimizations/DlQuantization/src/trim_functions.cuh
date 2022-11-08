@@ -95,6 +95,18 @@ __device__ inline double round_stochastic(double val, int seed)
     return __double2int_rd(val + rand_uniform_double(seed));
 }
 
+__device__ inline float round_floor(float val)
+{
+    return __float2int_rd(val);
+}
+
+__device__ inline double round_floor(double val)
+{
+    return __double2int_rd(val);
+}
+
+
+
 /**
  * @brief Quantize a floating point number to fixed point.
  * @param in Pointer to the floating point number to be quantized.
@@ -129,6 +141,12 @@ __device__ void quantizeToFxpDevice(const DTYPE* in, DTYPE* out,
         case ROUND_STOCHASTIC:
         {
             *out = round_stochastic(*out, seed);
+            break;
+        }
+        case ROUND_FLOOR:
+        {
+
+            *out = round_floor(*out);
             break;
         }
         default:

@@ -88,7 +88,7 @@ template <typename DTYPE>
 void dequantizeFromPackedFxpCpu(const uint8_t* input, int cnt,
                                 const TfEncoding& encoding, DTYPE* output, bool shiftToSigned);
 
-double computeDelta(double encodingMin, double encodingMax, double numSteps);
+double computeDelta(double encodingMin, double encodingMax, double numSteps, ScalingMode scaling_mode);
 double computeOffset(double encodingMin, double delta);
 
 

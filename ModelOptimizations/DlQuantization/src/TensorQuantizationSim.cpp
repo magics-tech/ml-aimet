@@ -59,7 +59,7 @@ TensorQuantizationSim<DTYPE>::TensorQuantizationSim()
 
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::fillQuantizeInfo(TfEncoding& encoding, DlQuantization::ComputationMode& cpuGpuMode,
-                                                     uint8_t bw, double encodingMin, double encodingMax, bool use_cuda)
+                                                     uint8_t bw, double encodingMin, double encodingMax, ScalingMode scalingMode, bool use_cuda)
 {
     gateMinMax(encodingMin, encodingMax);
     encoding.min = encodingMin;
@@ -74,7 +74,7 @@ void TensorQuantizationSim<DTYPE>::fillQuantizeInfo(TfEncoding& encoding, DlQuan
     }
 
     // compute offset and delta on the fly
-    encoding.delta = computeDelta(encodingMin, encodingMax, numSteps);
+    encoding.delta = computeDelta(encodingMin, encodingMax, numSteps, scalingMode);
     encoding.offset = computeOffset(encodingMin, encoding.delta);
 
     if (use_cuda)
@@ -86,13 +86,13 @@ void TensorQuantizationSim<DTYPE>::fillQuantizeInfo(TfEncoding& encoding, DlQuan
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::quantizeDequantizeTensor(const DTYPE* inputTensorData, size_t inputTensorCount,
                                                             DTYPE* outputTensorData, double encodingMin,
-                                                            double encodingMax, uint8_t bw, RoundingMode roundingMode,
+                                                            double encodingMax, uint8_t bw, RoundingMode roundingMode, ScalingMode scalingMode,
                                                             bool use_cuda)
 {
     DlQuantization::ComputationMode cpuGpuMode;
     TfEncoding encoding;
 
-    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, use_cuda);
+    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, scalingMode, use_cuda);
     quantizeDequantize(inputTensorData, inputTensorCount, encoding, outputTensorData,
                        cpuGpuMode, roundingMode);
 }
@@ -100,13 +100,13 @@ void TensorQuantizationSim<DTYPE>::quantizeDequantizeTensor(const DTYPE* inputTe
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::quantizeTensor(const DTYPE* inputTensorData, size_t inputTensorCount,
                                                   DTYPE* outputTensorData, double encodingMin, double encodingMax,
-                                                  uint8_t bw, RoundingMode roundingMode, bool use_cuda,
+                                                  uint8_t bw, RoundingMode roundingMode, ScalingMode scalingMode, bool use_cuda,
                                                   bool shiftToSigned)
 {
     DlQuantization::ComputationMode cpuGpuMode;
     TfEncoding encoding;
 
-    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, use_cuda);
+    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, scalingMode, use_cuda);
     quantizeToFxp(inputTensorData, inputTensorCount, encoding, outputTensorData,
                   cpuGpuMode, roundingMode, shiftToSigned);
 }
@@ -114,13 +114,13 @@ void TensorQuantizationSim<DTYPE>::quantizeTensor(const DTYPE* inputTensorData, 
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::quantizeTensorPacked(const DTYPE* inputTensorData, size_t inputTensorCount,
                                                         std::vector<uint8_t>& outputTensorData, double encodingMin, double encodingMax,
-                                                        uint8_t bw, RoundingMode roundMode, bool useCuda,
+                                                        uint8_t bw, RoundingMode roundMode, ScalingMode scaleMode, bool useCuda,
                                                         bool shiftToSigned)
 {
     DlQuantization::ComputationMode cpuGpuMode;
     TfEncoding encoding{};
 
-    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, useCuda);
+    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, scaleMode,  useCuda);
     outputTensorData.resize(ceil(getBw(bw) * inputTensorCount / 8.0));
     quantizeToFxpPacked(inputTensorData, inputTensorCount, encoding, outputTensorData.data(), outputTensorData.size(), cpuGpuMode,
                         roundMode, shiftToSigned);
@@ -129,7 +129,7 @@ void TensorQuantizationSim<DTYPE>::quantizeTensorPacked(const DTYPE* inputTensor
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::quantizeDequantizePerChannelTensor(
     std::vector<std::vector<DTYPE>>& splits, std::vector<uint32_t> splitShape, uint32_t axis, DTYPE* outputTensorData,
-    const std::vector<TfEncoding>& encodings, uint8_t bw, RoundingMode roundMode, bool useCuda)
+    const std::vector<TfEncoding>& encodings, uint8_t bw, RoundingMode roundMode, ScalingMode scaleMode, bool useCuda)
 {
     DlQuantization::ComputationMode cpuGpuMode;
     std::vector<TfEncoding> completeEncodings;
@@ -139,7 +139,7 @@ void TensorQuantizationSim<DTYPE>::quantizeDequantizePerChannelTensor(
     for (auto idx = 0; idx < encodings.size(); idx++)
     {
         fillQuantizeInfo(completeEncodings[idx], cpuGpuMode, bw,
-                         encodings[idx].min, encodings[idx].max, useCuda);
+                         encodings[idx].min, encodings[idx].max, scaleMode, useCuda);
     }
 
     // Loop through splits and quantize each independently
@@ -158,7 +158,7 @@ void TensorQuantizationSim<DTYPE>::quantizePerChannelTensorPacked(std::vector<st
                                                                   std::vector<uint32_t> splitShape, uint32_t axis,
                                                                   std::vector<uint8_t>& outputTensorData,
                                                                   const std::vector<TfEncoding>& encodings, uint8_t bw,
-                                                                  RoundingMode roundMode, bool useCuda,
+                                                                  RoundingMode roundMode, ScalingMode scaleMode, bool useCuda,
                                                                   bool shiftToSigned)
 {
     DlQuantization::ComputationMode cpuGpuMode;
@@ -173,7 +173,7 @@ void TensorQuantizationSim<DTYPE>::quantizePerChannelTensorPacked(std::vector<st
     for (auto idx = 0; idx < encodings.size(); idx++)
     {
         fillQuantizeInfo(completeEncodings[idx], cpuGpuMode, bw, encodings[idx].min,
-                         encodings[idx].max, useCuda);
+                         encodings[idx].max, scaleMode, useCuda);
     }
 
     // Loop through splits and quantize each independently
@@ -196,13 +196,13 @@ void TensorQuantizationSim<DTYPE>::quantizePerChannelTensorPacked(std::vector<st
 
 template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::dequantizeTensor(const uint8_t* inputTensorData, size_t inputTensorCount,
-                                                    DTYPE* output, double encodingMin, double encodingMax, uint8_t bw,
+                                                    DTYPE* output, double encodingMin, double encodingMax, uint8_t bw, ScalingMode scaleMode,
                                                     bool shiftToSigned)
 {
     DlQuantization::ComputationMode cpuGpuMode;
     TfEncoding encoding{};
 
-    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, false);
+    fillQuantizeInfo(encoding, cpuGpuMode, bw, encodingMin, encodingMax, scaleMode, false);
     dequantizeFromPackedFxp(inputTensorData, inputTensorCount, encoding, output, cpuGpuMode,
                             shiftToSigned);
 }
@@ -210,7 +210,7 @@ template <typename DTYPE>
 void TensorQuantizationSim<DTYPE>::dequantizePerChannelTensor(const uint8_t* inputTensorData,
                                                               const std::vector<uint32_t>& inputShape, uint32_t axis,
                                                               DTYPE* outputTensorData, uint8_t bw,
-                                                              const std::vector<TfEncoding>& encodings,
+                                                              const std::vector<TfEncoding>& encodings, ScalingMode scaleMode,
                                                               bool shiftToSigned)
 {
     DlQuantization::ComputationMode cpuGpuMode;
@@ -221,7 +221,7 @@ void TensorQuantizationSim<DTYPE>::dequantizePerChannelTensor(const uint8_t* inp
     for (auto idx = 0; idx < encodings.size(); idx++)
     {
         fillQuantizeInfo(completeEncodings[idx], cpuGpuMode, bw,
-                         encodings[idx].min, encodings[idx].max, false);
+                         encodings[idx].min, encodings[idx].max, scaleMode, false);
     }
 
     std::vector<uint32_t> splitShape;
@@ -260,7 +260,8 @@ void TensorQuantizationSim<DTYPE>::dequantizePerChannelTensor(const uint8_t* inp
             throw std::runtime_error("Tensor split size mismatch!");
         }
         dequantizeTensor(split.data(), split.size(), splits_dequant[i].data(),
-                         e.min,e.max, bw, shiftToSigned);
+                         e.min,e.max, bw, scaleMode, shiftToSigned);
+
     }
 
     std::vector<uint32_t> dummy;

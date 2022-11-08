@@ -62,7 +62,7 @@ public:
     * @param quantScheme Quantization scheme (e.g. TF-Enhanced)
     * @param roundingMode Rounding mode to use during quantization
     */
-    TensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode);
+    TensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode, ScalingMode scalingMode);
 
     /**
      * Reset stats being collected to compute encoding
@@ -124,7 +124,7 @@ public:
      * @param shiftToSigned
      */
     void quantizeTensorPacked(const float* input, std::size_t tensorSize, std::vector<uint8_t>& output,
-                              double encodingMin, double encodingMax, uint8_t bw, RoundingMode roundMode,
+                              double encodingMin, double encodingMax, uint8_t bw, RoundingMode roundMode, ScalingMode scaleMode,
                               bool useCuda, bool shiftToSigned);
 
     /**
@@ -142,13 +142,13 @@ public:
     void quantizeDequantizePerChannelTensor(const float* input, const std::vector<uint32_t>& inputShape,
                                             uint32_t axis, float* output,
                                             std::vector <TfEncoding> &encodings,
-                                            uint8_t bw, RoundingMode roundMode,
+                                            uint8_t bw, RoundingMode roundMode, ScalingMode scaleMode,
                                             bool useCuda, bool shiftToSigned);
 
     void quantizePerChannelTensorPacked(const float* input, const std::vector<uint32_t>& inputShape,
                                         uint32_t axis, std::vector<uint8_t>& output,
                                         std::vector <TfEncoding> &encodings,
-                                        uint8_t bw, RoundingMode roundMode,
+                                        uint8_t bw, RoundingMode roundMode, ScalingMode scaleMode,
                                         bool useCuda, bool shiftToSigned);
 
     /**
@@ -158,11 +158,11 @@ public:
      * @param encoding The min, max, delta and offset values
      * @param output[in/out]  The output tensor
      */
-    void dequantize(const uint8_t* input, std::size_t tensorSize, double encodingMin, double encodingMax, uint8_t bw, float* output,
+    void dequantize(const uint8_t* input, std::size_t tensorSize, double encodingMin, double encodingMax, uint8_t bw, float* output, ScalingMode scaleMode,
                     bool shiftToSigned);
 
     void dequantizePerChannelTensor(const uint8_t* input, const std::vector<uint32_t> &inputShape, uint32_t axis,
-                                    const std::vector<TfEncoding> &encodings, uint8_t bw, float* output, bool useSymmetricEncodings);
+                                    const std::vector<TfEncoding> &encodings, uint8_t bw, float* output, ScalingMode scaleMode, bool useSymmetricEncodings);
 
     /**
     * sets quantScheme and creates new encoding analyzer instance
@@ -225,6 +225,8 @@ public:
     inline bool hasValidStats(){return _validStats;}
 
     RoundingMode roundingMode;      ///< Rounding mode to use during quantization
+    ScalingMode scalingMode;
+
     bool isEncodingValid;           ///< Is encoding valid
 
 private:

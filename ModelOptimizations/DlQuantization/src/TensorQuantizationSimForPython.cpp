@@ -60,6 +60,7 @@ TensorQuantizationSimForPython::TensorQuantizationSimForPython()
 py::array_t<float> TensorQuantizationSimForPython::quantizeDequantize(py::array_t<float> input,
                                                                       DlQuantization::TfEncoding& encoding,
                                                                       DlQuantization::RoundingMode roundingMode,
+                                                                      DlQuantization::ScalingMode scalingMode,
                                                                       unsigned int bitwidth,
                                                                       bool use_cuda)
 {
@@ -74,7 +75,7 @@ py::array_t<float> TensorQuantizationSimForPython::quantizeDequantize(py::array_
     size_t inputTensorSize = npArr.shape(0) * npArr.shape(1) * npArr.shape(2) * npArr.shape(3);
 
     _tensorQuantizationSim->quantizeDequantizeTensor(inputDataPtr, inputTensorSize, outputDataPtr,
-                                                     encoding.min, encoding.max, bitwidth, roundingMode,
+                                                     encoding.min, encoding.max, bitwidth, roundingMode,scalingMode,
                                                      use_cuda);
 
     return output;

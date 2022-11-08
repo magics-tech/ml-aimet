@@ -167,7 +167,7 @@ def validate_quantsim_inputs(
                          'tf, tf_enhanced, percentile, QuantScheme.post_training_tf, '
                          'QuantScheme.post_training_tf_enhanced, QuantScheme.post_training_percentile')
 
-    if rounding_mode not in ('nearest', 'stochastic'):
+    if rounding_mode not in ('nearest', 'stochastic', 'floor'):
         raise ValueError('Parameter round mode is not a valid selection. Valid selections are nearest or '
                          'stochastic')
 

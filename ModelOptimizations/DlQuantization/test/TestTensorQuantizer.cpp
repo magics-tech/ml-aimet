@@ -102,8 +102,8 @@ protected:
             }
         }
 
-        enhancedTensorQuant.reset(new TensorQuantizer(QuantizationMode::QUANTIZATION_TF_ENHANCED, ROUND_NEAREST));
-        tfTensorQuant.reset(new TensorQuantizer(QuantizationMode::QUANTIZATION_TF, ROUND_NEAREST));
+        enhancedTensorQuant.reset(new TensorQuantizer(QuantizationMode::QUANTIZATION_TF_ENHANCED, ROUND_NEAREST, SCALE_POW2));
+        tfTensorQuant.reset(new TensorQuantizer(QuantizationMode::QUANTIZATION_TF, ROUND_NEAREST, SCALE_POW2));
     }
 };
 
@@ -255,7 +255,7 @@ TEST_F(TestTensorQuantizer, SANITY_GeneratePerChannelParams)
     std::vector<uint32_t> splitShape;
     std::vector<std::vector<float>> splitParams;
 
-    TensorQuantizer tensorQuantizer(QuantizationMode::QUANTIZATION_TF, ROUND_NEAREST);
+    TensorQuantizer tensorQuantizer(QuantizationMode::QUANTIZATION_TF, ROUND_NEAREST, SCALE_POW2);
     tensorQuantizer.generatePerChannelEncodings(data1.data(), shape1, axis, encodings, bw, splitParams, splitShape,
                                                 false);
 
@@ -308,7 +308,7 @@ TEST_F(TestTensorQuantizer, SANITY_QuantizePerChannelTensorPackedAsymmetric)
     std::vector<uint8_t> params_quantized(this->data2.size());
     tfTensorQuant->setUnsignedSymmetric(false);
     tfTensorQuant->quantizePerChannelTensorPacked(this->data2.data(), this->shape2, axis, params_quantized, encodings,
-                                                  bw, DlQuantization::RoundingMode::ROUND_NEAREST, false, false);
+                                                  bw, DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, false);
 
     ASSERT_EQ(encodings.size(), this->shape2[axis]);
     ASSERT_EQ(encodings.size(), expectedEncodings.size());
@@ -342,7 +342,7 @@ TEST_F(TestTensorQuantizer, SANITY_QuantizePerChannelTensorPackedSymmetric)
     std::vector<uint8_t> params_quantized(this->data2.size());
     tfTensorQuant->setUnsignedSymmetric(false);
     tfTensorQuant->quantizePerChannelTensorPacked(this->data2.data(), this->shape2, axis, params_quantized, encodings,
-                                                  bw, DlQuantization::RoundingMode::ROUND_NEAREST, false, true);
+                                                  bw, DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, true);
 
     ASSERT_EQ(encodings.size(), this->shape2[axis]);
     ASSERT_EQ(encodings.size(), expectedEncodings.size());
@@ -379,7 +379,7 @@ TEST_F(TestTensorQuantizer, SANITY_QuantizeDequantizePerChannelTensor)
     std::vector<float> params_quantized(this->data2.size());
     tfTensorQuant->setUnsignedSymmetric(false);
     tfTensorQuant->quantizeDequantizePerChannelTensor(this->data2.data(), this->shape2, axis, params_quantized.data(),
-                                                      encodings, bw, DlQuantization::RoundingMode::ROUND_NEAREST, false,
+                                                      encodings, bw, DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false,
                                                       false);
 
     ASSERT_EQ(encodings.size(), this->shape2[axis]);
@@ -424,7 +424,7 @@ TEST_F(TestTensorQuantizer, SANITY_QuantizeDequantizePerChannelTensorSymmetric)
     std::vector<float> params_quantized(this->data2.size());
     tfTensorQuant->setUnsignedSymmetric(false);
     tfTensorQuant->quantizeDequantizePerChannelTensor(this->data2.data(), this->shape2, axis, params_quantized.data(),
-                                                      encodings, bw, DlQuantization::RoundingMode::ROUND_NEAREST, false,
+                                                      encodings, bw, DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false,
                                                       true);
 
     ASSERT_EQ(encodings.size(), this->shape2[axis]);
@@ -460,7 +460,7 @@ TEST_F(TestTensorQuantizer, SANITY_QuantizeTensorPackedAsymmetric)
     tfTensorQuant->updateStats(data, cnt, false);
     encoding = tfTensorQuant->computeEncoding(bw, false);
     tfTensorQuant->quantizeTensorPacked(data, cnt, output, encoding.min, encoding.max, bw,
-                                        DlQuantization::ROUND_NEAREST, false, false);
+                                        DlQuantization::ROUND_NEAREST, DlQuantization::SCALE_POW2, false, false);
     // Check quantized values
     for (int i = 0; i < cnt; ++i)
     {
@@ -494,7 +494,7 @@ TEST_F(TestTensorQuantizer, SANITY_Dequantize)
     tfTensorQuant->updateStats(data_unquantized, cnt, false);
     encoding = tfTensorQuant->computeEncoding(bw, false);
     tfTensorQuant->quantizeTensorPacked(data_unquantized, cnt, data_quantized, encoding.min, encoding.max, bw,
-                                        DlQuantization::ROUND_NEAREST, false, false);
+                                        DlQuantization::ROUND_NEAREST, DlQuantization::SCALE_POW2, false, false);
 
     // Check quantized values
     for (int i = 0; i < cnt; ++i)
@@ -504,7 +504,7 @@ TEST_F(TestTensorQuantizer, SANITY_Dequantize)
     // De-quantize values
     std::vector<float> data_dequantized(cnt);
     // Test the pointer API.
-    tfTensorQuant->dequantize(data_quantized.data(), cnt, encoding.min, encoding.max, bw, data_dequantized.data(),
+    tfTensorQuant->dequantize(data_quantized.data(), cnt, encoding.min, encoding.max, bw, data_dequantized.data(), DlQuantization::ScalingMode::SCALE_POW2,
                               false);
 
     // Check de-quantized values
@@ -539,7 +539,7 @@ TEST_F(TestTensorQuantizer, SANITY_DequantizePerChannel)
     std::vector<TfEncoding> encodings;
     tfTensorQuant->setUnsignedSymmetric(false);
     tfTensorQuant->quantizePerChannelTensorPacked(data_unquantized, inputShape, axis, data_quantized, encodings, bw,
-                                                  DlQuantization::RoundingMode::ROUND_NEAREST, false, false);
+                                                  DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, false);
 
     // Check quantized values
     for (int i = 0; i < cnt; ++i)
@@ -550,7 +550,7 @@ TEST_F(TestTensorQuantizer, SANITY_DequantizePerChannel)
     std::vector<float> data_dequantized(cnt);
     // Test the pointer API.
     tfTensorQuant->dequantizePerChannelTensor(data_quantized.data(), inputShape, axis, encodings, bw,
-                                              data_dequantized.data(), false);
+                                              data_dequantized.data(), DlQuantization::SCALE_POW2, false);
 
     // Check de-quantized values
     float data_dequantized_expected[] = {-39.7647f, -1.01961f, 0,        1.01961f, 2.03922f, -49.9608f,
@@ -567,7 +567,7 @@ TEST_F(TestTensorQuantizer, SANITY_DequantizePerChannel)
 
 TEST_F(TestTensorQuantizer, SanityTestGpu)
 {
-    TensorQuantizer tensorQuantizer(QuantizationMode::QUANTIZATION_TF_ENHANCED, ROUND_NEAREST);
+    TensorQuantizer tensorQuantizer(QuantizationMode::QUANTIZATION_TF_ENHANCED, ROUND_NEAREST, SCALE_POW2);
 
     float mean   = 2;
     float stddev = 2;

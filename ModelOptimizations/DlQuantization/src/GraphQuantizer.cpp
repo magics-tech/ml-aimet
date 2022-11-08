@@ -62,7 +62,7 @@ GraphQuantizer::GraphQuantizer(const std::vector<string>& tensorNames, Computati
     for (const auto& tensorName: tensorNames)
     {
         _tensorQuantizerActsMap[tensorName] =
-            std::make_shared<TensorQuantizer>(_quantizationMode, RoundingMode::ROUND_NEAREST);
+            std::make_shared<TensorQuantizer>(_quantizationMode, RoundingMode::ROUND_NEAREST, ScalingMode::SCALE_POW2);
     }
 }
 

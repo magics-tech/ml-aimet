@@ -40,8 +40,8 @@
 namespace DlQuantization
 {
 
-PyTensorQuantizer::PyTensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode) :
-    TensorQuantizer(quantScheme, roundingMode){}
+PyTensorQuantizer::PyTensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode, ScalingMode scalingMode) :
+    TensorQuantizer(quantScheme, roundingMode, scalingMode){}
 
 void PyTensorQuantizer::updateStats(py::array_t<float> tensor, bool useCuda)
 {

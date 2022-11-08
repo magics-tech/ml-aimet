@@ -61,7 +61,7 @@ TEST(TestTensorQuantizationSim, SanityTest)
     double max    = 0.72;
 
     sim.quantizeDequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                                 DlQuantization::RoundingMode::ROUND_NEAREST, false);
+                                 DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {-0.45811754, -0.2498823, 0.0, 0.2498823, 0.49976459, 0.72188222};
 
@@ -89,7 +89,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithGatedMin)
     double max    = 1.0;
 
     sim.quantizeDequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                                 DlQuantization::RoundingMode::ROUND_NEAREST,  false);
+                                 DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {0.0, 0.0, 0.0, 0.25098041, 0.49803925, 0.74901962};
 
@@ -117,7 +117,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithGatedMinMaxEqual)
     double max    = 0.5;
 
     sim.quantizeDequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                                 DlQuantization::RoundingMode::ROUND_NEAREST,  false);
+                                 DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {0.0, 0.0, 0.0, 0.24901962,  0.5, 0.5};
 
@@ -145,7 +145,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithGatedMax)
     double max    = -0.1;
 
     sim.quantizeDequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                                 DlQuantization::RoundingMode::ROUND_NEAREST,  false);
+                                 DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {-0.5, -0.24901962, 0.0, 0.0, 0.0, 0.0};
 
@@ -171,7 +171,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithQuantizeOnlyUnsigned)
     double max    = 0.72;
 
     sim.quantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                       DlQuantization::RoundingMode::ROUND_NEAREST, false, false);
+                       DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, false);
 
     std::vector<float> expectedOutput = {0, 45, 99, 153, 207, 255};
 
@@ -196,7 +196,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithDeQuantizeOnlyUnsigned)
     double min    = -0.46;
     double max    = 0.72;
 
-    sim.dequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
+    sim.dequantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw, DlQuantization::ScalingMode::SCALE_POW2,
                          false);
 
 
@@ -221,7 +221,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithQuantizeOnlySigned)
     double max    = 0.72;
 
     sim.quantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                       DlQuantization::RoundingMode::ROUND_NEAREST, false, true);
+                       DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, true);
 
     std::vector<float> expectedOutput = {-128, -83, -29, 25, 79, 127};
 
@@ -246,7 +246,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithQuantizePackedOnlyUnsigned)
     double max    = 0.72;
 
     sim.quantizeTensorPacked(tensor.data(), tensor.size(), outputTensor, min, max, bw,
-                       DlQuantization::RoundingMode::ROUND_NEAREST, false, false);
+                       DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, false);
 
     std::vector<float> expectedOutput = {0, 45, 99, 153, 207, 255};
 
@@ -291,7 +291,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithQuantizePerChannelUnsigned)
 
     std::vector<float> params_quantized(tensor.size());
     sim.quantizePerChannelTensorPacked(splitParams, splitShape, axis, outputTensor, encodings, bw,
-                                           DlQuantization::RoundingMode::ROUND_NEAREST,  false, false);
+                                           DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, false);
 
     std::vector<uint8_t> expectedOutput = {0, 45, 99, 153, 207, 255};
 
@@ -337,7 +337,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithQuantizeDequantizePerChannel)
 
     std::vector<float> params_quantized(tensor.size());
     sim.quantizeDequantizePerChannelTensor(splitParams, splitShape,axis, outputTensor.data(), encodings, bw,
-                                           DlQuantization::RoundingMode::ROUND_NEAREST,  false);
+                                           DlQuantization::RoundingMode::ROUND_NEAREST,  DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {-0.5f, 0, -0.24902f, 0, 0, 0,
                                          0, 0, 0, -0.5f, 0, -0.24902f};
@@ -376,7 +376,7 @@ TEST(TestTensorQuantizationSim, SanityTestWithDequantizePerChannel)
 
     std::vector<float> params_quantized(tensor.size());
     sim.dequantizePerChannelTensor(tensor.data(), inputShape, axis,
-                                   outputTensor.data(), bw, encodings, false);
+                                   outputTensor.data(), bw, encodings, DlQuantization::ScalingMode::SCALE_POW2, false);
 
     std::vector<float> expectedOutput = {-0.5f, -0.25f, 0, 0.25, 0.5, 0.75};
 
@@ -402,7 +402,7 @@ TEST(TestTensorQuantizationSim, SanityTestWith32BitQuantizeOnlySigned)
     double max    = 1.0;
 
     sim.quantizeTensor(tensor.data(), tensor.size(), outputTensor.data(), min, max, bw,
-                       DlQuantization::RoundingMode::ROUND_NEAREST, false, true);
+                       DlQuantization::RoundingMode::ROUND_NEAREST, DlQuantization::ScalingMode::SCALE_POW2, false, true);
 
     std::vector<float> expectedOutput = {-2147483648};
     EXPECT_FLOAT_EQ(outputTensor[0], expectedOutput[0]);

@@ -45,9 +45,10 @@
 namespace DlQuantization
 {
 
-TensorQuantizer::TensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode) :
+TensorQuantizer::TensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode, ScalingMode scalingMode) :
     _quantScheme(quantScheme),
     roundingMode(roundingMode),
+    scalingMode(scalingMode),
     isEncodingValid(false),
     _useStrictSymmetric(false),
     _useUnsignedSymmetric(true),
@@ -166,22 +167,22 @@ void TensorQuantizer::quantizeDequantize(const float* input, std::size_t tensorS
 {
     assert(isEncodingValid);
     _tensorQuantizationSim->quantizeDequantizeTensor(input, tensorSize, output, encodingMin, encodingMax, bitwidth,
-                                                     roundingMode, useCuda);
+                                                     roundingMode, scalingMode, useCuda);
 }
 
 void TensorQuantizer::quantizeTensorPacked(const float* input, std::size_t tensorSize, std::vector<uint8_t>& output,
-                                           double encodingMin, double encodingMax, uint8_t bw, RoundingMode roundMode,
+                                           double encodingMin, double encodingMax, uint8_t bw, RoundingMode roundMode,ScalingMode scaleMode,
                                            bool useCuda, bool useStrictSymmetric)
 {
     assert(isEncodingValid);
-    _tensorQuantizationSim->quantizeTensorPacked(input, tensorSize, output, encodingMin, encodingMax, bw, roundMode,
+    _tensorQuantizationSim->quantizeTensorPacked(input, tensorSize, output, encodingMin, encodingMax, bw, roundMode, scaleMode,
                                                  useCuda, useStrictSymmetric);
 }
 
 void TensorQuantizer::quantizeDequantizePerChannelTensor(const float* input, const std::vector<uint32_t>& inputShape,
                                                          uint32_t axis, float* output,
                                                          std::vector<TfEncoding>& encodings, uint8_t bw,
-                                                         RoundingMode roundMode, bool useCuda, bool useStrictSymmetric)
+                                                         RoundingMode roundMode, ScalingMode scaleMode, bool useCuda, bool useStrictSymmetric)
 {
     std::vector<uint32_t> splitShape;
     std::vector<std::vector<float>> splits;
@@ -190,13 +191,13 @@ void TensorQuantizer::quantizeDequantizePerChannelTensor(const float* input, con
     generatePerChannelEncodings(input, inputShape, axis, encodings, bw, splits, splitShape, useCuda);
 
     _tensorQuantizationSim->quantizeDequantizePerChannelTensor(splits, splitShape, axis, output, encodings, bw,
-                                                               roundMode, useCuda);
+                                                               roundMode, scaleMode, useCuda);
 }
 
 void TensorQuantizer::quantizePerChannelTensorPacked(const float* input, const std::vector<uint32_t>& inputShape,
                                                      uint32_t axis, std::vector<uint8_t>& output,
                                                      std::vector<TfEncoding>& encodings, uint8_t bw,
-                                                     RoundingMode roundMode, bool useCuda, bool useStrictSymmetric)
+                                                     RoundingMode roundMode, ScalingMode scaleMode, bool useCuda, bool useStrictSymmetric)
 {
     std::vector<uint32_t> splitShape;
     std::vector<std::vector<float>> splits;
@@ -204,22 +205,22 @@ void TensorQuantizer::quantizePerChannelTensorPacked(const float* input, const s
     // currently we only support strict symmetric for packed tensors
     this->setStrictSymmetric(useStrictSymmetric);
     generatePerChannelEncodings(input, inputShape, axis, encodings, bw, splits, splitShape, useCuda);
-    _tensorQuantizationSim->quantizePerChannelTensorPacked(splits, splitShape, axis, output, encodings, bw, roundMode,
+    _tensorQuantizationSim->quantizePerChannelTensorPacked(splits, splitShape, axis, output, encodings, bw, roundMode, scaleMode,
                                                            useCuda, useStrictSymmetric);
 }
 
 void TensorQuantizer::dequantize(const uint8_t* input, std::size_t tensorSize, double encodingMin, double encodingMax,
-                                 uint8_t bw, float* output, bool useStrictSymmetric)
+                                 uint8_t bw, float* output, ScalingMode scaleMode, bool useStrictSymmetric)
 {
-    _tensorQuantizationSim->dequantizeTensor(input, tensorSize, output, encodingMin, encodingMax, bw,
+    _tensorQuantizationSim->dequantizeTensor(input, tensorSize, output, encodingMin, encodingMax, bw, scaleMode,
                                              useStrictSymmetric);
 }
 
 void TensorQuantizer::dequantizePerChannelTensor(const uint8_t* input, const std::vector<uint32_t>& inputShape,
                                                  uint32_t axis, const std::vector<TfEncoding>& encodings, uint8_t bw,
-                                                 float* output, bool useStrictSymmetric)
+                                                 float* output, ScalingMode scaleMode, bool useStrictSymmetric)
 {
-    _tensorQuantizationSim->dequantizePerChannelTensor(input, inputShape, axis, output, bw, encodings,
+    _tensorQuantizationSim->dequantizePerChannelTensor(input, inputShape, axis, output, bw, encodings, scaleMode,
                                                        useStrictSymmetric);
 }
 

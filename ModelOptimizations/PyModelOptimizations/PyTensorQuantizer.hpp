@@ -59,7 +59,7 @@ public:
     * @param quantScheme Quantization scheme (e.g. TF-Enhanced)
     * @param roundingMode Rounding mode to use during quantization
      */
-    PyTensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode);
+    PyTensorQuantizer(QuantizationMode quantScheme, RoundingMode roundingMode, ScalingMode scalingMode);
 
     /**
      * Update stats being collected to compute encoding. Overloaded version that accepts a numpy tensor.

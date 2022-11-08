@@ -77,8 +77,12 @@ MAP_QUANT_SCHEME_TO_PYMO = {QuantScheme.post_training_tf: libpymo.QuantizationMo
                             QuantScheme.post_training_percentile:
                                 libpymo.QuantizationMode.QUANTIZATION_PERCENTILE}
 MAP_ROUND_MODE_TO_PYMO = {'nearest': libpymo.RoundingMode.ROUND_NEAREST,
-                          'stochastic': libpymo.RoundingMode.ROUND_STOCHASTIC}
+                          'stochastic': libpymo.RoundingMode.ROUND_STOCHASTIC,
+                          'floor':libpymo.RoundingMode.ROUND_FLOOR}
 
+
+MAP_SCALE_MODE_TO_PYMO = {'pow2': libpymo.ScalingMode.SCALE_POW2,
+                          'ori': libpymo.ScalingMode.SCALE_ORI}
 
 class ActivationType(Enum):
     """ Enums to identify activation type"""
@@ -347,12 +351,6 @@ class QuantizationDataType(Enum):
     int = 1
     float = 2
 
-class SupportedKernelsAction(Enum):
-    """ Enumeration to specify the action to apply during supported_kernels validation"""
-    allow_error = 1
-    warn_on_error = 2
-    assert_on_error = 3
-
 
 class QuantDtypeBwInfo:
     """
@@ -374,8 +372,8 @@ class QuantDtypeBwInfo:
         self._validate_inputs()
 
     def __str__(self):
-        return (f'(activation_data_type = {self.act_dtype}, act_bw = {self.act_bw} '
-                f'param_data_type = {self.param_dtype} param_bw = {self.param_bw})')
+        return (f'activation_data_type = {self.act_dtype}), act_bw = {self.act_bw}\n'
+                f'param_data_type = {self.param_dtype} param_bw = {self.param_bw}\n')
 
     def __eq__(self, other):
         return self.act_dtype == other.act_dtype and self.act_bw == other.act_bw and \
@@ -392,19 +390,3 @@ class QuantDtypeBwInfo:
         if self.act_dtype == QuantizationDataType.float and self.act_bw != 16:
             raise ValueError(
                 'float act_dtype can only be used when act_bw is set to 16, not ' + str(self.act_bw))
-
-    def is_same_activation(self, bw: int, dtype: QuantizationDataType):
-        """
-        helper function to check if activation of the object is same as input
-        :param bw: bitwidth to verify against
-        :param dtype: dtype to verify against
-        """
-        return bw == self.act_bw and dtype == self.act_dtype
-
-    def is_same_param(self, bw: int, dtype: QuantizationDataType):
-        """
-        helper function to check if param of the object is same as input
-        :param bw: bitwidth to verify against
-        :param dtype: dtype to verify against
-        """
-        return bw == self.param_bw and dtype == self.param_dtype

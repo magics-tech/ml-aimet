@@ -47,12 +47,13 @@ from torch import nn
 
 import aimet_common.libpymo as libpymo
 from aimet_common.utils import AimetLogger
-from aimet_common.defs import QuantScheme, QuantizationDataType, MAP_ROUND_MODE_TO_PYMO
+from aimet_common.defs import QuantScheme, QuantizationDataType, MAP_ROUND_MODE_TO_PYMO, MAP_SCALE_MODE_TO_PYMO
 from aimet_torch.custom import custom_tensor_utils
 from aimet_torch import utils
 from aimet_torch.tensor_quantizer import StaticGridPerTensorQuantizer, StaticGridPerChannelQuantizer, TensorQuantizer, \
     LearnedGridTensorQuantizer, ParameterQuantizer
 import aimet_torch.quantsim_straight_through_grad as ste
+import pdb
 
 _logger = AimetLogger.get_area_logger(AimetLogger.LogAreas.Quant)
 
@@ -95,7 +96,7 @@ TF_ENHANCED_OFFSET_FACTOR = 0
 TF_ENHANCED_STRIDE_FACTOR = 2
 
 
-def tensor_quantizer_factory(bitwidth: int, round_mode: str, quant_scheme: QuantScheme,
+def tensor_quantizer_factory(bitwidth: int, round_mode: str, scale_mode: str, quant_scheme: QuantScheme,
                              use_symmetric_encodings: bool, enabled_by_default: bool,
                              data_type: QuantizationDataType = QuantizationDataType.int):
     """
@@ -105,22 +106,20 @@ def tensor_quantizer_factory(bitwidth: int, round_mode: str, quant_scheme: Quant
     :param quant_scheme: Quantization scheme (e.g. Range Learning)
     :param use_symmetric_encodings: True if symmetric encoding is used.  False otherwise.
     :param enabled_by_default: True if quantization of tensor is enabled.  False otherwise.
-    :param data_type: Quantization data_type to be used
     :return: An instance of StaticGridPerTensorQuantizer
     """
 
-    # TODO add way to pass extra parameters (e.g. FP8)
     if quant_scheme in (QuantScheme.post_training_tf_enhanced, QuantScheme.post_training_tf,
                         QuantScheme.post_training_percentile):
 
-        tensor_quantizer = StaticGridPerTensorQuantizer(bitwidth, round_mode, quant_scheme,
+        tensor_quantizer = StaticGridPerTensorQuantizer(bitwidth, round_mode, scale_mode, quant_scheme,
                                                         use_symmetric_encodings, enabled_by_default,
                                                         data_type=data_type)
 
     elif quant_scheme in (QuantScheme.training_range_learning_with_tf_init,
                           QuantScheme.training_range_learning_with_tf_enhanced_init):
 
-        tensor_quantizer = LearnedGridTensorQuantizer(bitwidth, round_mode, quant_scheme, use_symmetric_encodings,
+        tensor_quantizer = LearnedGridTensorQuantizer(bitwidth, round_mode,scale_mode, quant_scheme, use_symmetric_encodings,
                                                       enabled_by_default, data_type)
     else:
         raise AssertionError("Unsupported quant_scheme: " + str(quant_scheme))
@@ -219,7 +218,7 @@ class QcQuantizeWrapper(nn.Module):
     """
 
     # pylint: disable=too-many-arguments
-    def __init__(self, module_to_wrap: nn.Module, weight_bw: int, activation_bw: int, round_mode,
+    def __init__(self, module_to_wrap: nn.Module, weight_bw: int, activation_bw: int, round_mode, scale_mode,
                  quant_scheme: QuantScheme, is_output_quantized=True, is_symmetric=False, num_inputs=1, num_outputs=1,
                  data_type: QuantizationDataType = QuantizationDataType.int):
         """
@@ -236,13 +235,13 @@ class QcQuantizeWrapper(nn.Module):
         """
         super(QcQuantizeWrapper, self).__init__()
 
-        if data_type == QuantizationDataType.float and weight_bw not in [8, 16]:
-            raise ValueError('weight_bw in [8, 16] is the only supported configuration with floating point data type')
+        if data_type == QuantizationDataType.float and weight_bw != 16:
+            raise ValueError('weight_bw=16 is the only supported configuration with floating point data type')
 
-        if data_type == QuantizationDataType.float and activation_bw not in [8, 16]:
-            raise ValueError('activation_bw in [8, 16] is the only supported configuration with floating point data type')
+        if data_type == QuantizationDataType.float and activation_bw != 16:
+            raise ValueError('activation_bw=16 is the only supported configuration with floating point data type')
 
-        self.output_quantizers = [tensor_quantizer_factory(activation_bw, round_mode,
+        self.output_quantizers = [tensor_quantizer_factory(activation_bw, round_mode, scale_mode,
                                                            quant_scheme,
                                                            is_symmetric,
                                                            enabled_by_default=is_output_quantized,
@@ -256,14 +255,14 @@ class QcQuantizeWrapper(nn.Module):
         self.param_quantizers = {}
         for name, _ in module_to_wrap.named_parameters():
             _logger.debug("Adding quantizer for parameter: %s", name)
-            self.param_quantizers[name] = tensor_quantizer_factory(weight_bw, round_mode,
+            self.param_quantizers[name] = tensor_quantizer_factory(weight_bw, round_mode, scale_mode,
                                                                    quant_scheme,
                                                                    is_symmetric,
                                                                    enabled_by_default=True,
                                                                    data_type=data_type)
 
         # Create quantizer for layer input
-        self.input_quantizers = [tensor_quantizer_factory(activation_bw, round_mode,
+        self.input_quantizers = [tensor_quantizer_factory(activation_bw, round_mode, scale_mode,
                                                           quant_scheme,
                                                           is_symmetric,
                                                           enabled_by_default=False,
@@ -271,7 +270,6 @@ class QcQuantizeWrapper(nn.Module):
                                  for _ in range(num_inputs)]
 
         self._quant_scheme = quant_scheme
-        self.supported_kernels = {}
 
     def get_named_parameters(self):
         """
@@ -461,7 +459,7 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
     """ A custom PyTorch module that derives from QcQuantizeWrapper and quantizes modules """
 
     # pylint: disable=too-many-arguments
-    def __init__(self, module_to_wrap: nn.Module, weight_bw: int, activation_bw: int, round_mode, quant_scheme,
+    def __init__(self, module_to_wrap: nn.Module, weight_bw: int, activation_bw: int, round_mode, scale_mode, quant_scheme,
                  is_output_quantized=True, is_symmetric=False, num_inputs=1, num_outputs=1,
                  data_type: QuantizationDataType = QuantizationDataType.int):
         """
@@ -478,8 +476,9 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
         """
         # Translate round mode and quant scheme into pymo types prior to initializing super()
         round_mode = MAP_ROUND_MODE_TO_PYMO[round_mode]
+        scale_mode = MAP_SCALE_MODE_TO_PYMO[scale_mode]
 
-        super(StaticGridQuantWrapper, self).__init__(module_to_wrap, weight_bw, activation_bw, round_mode, quant_scheme,
+        super(StaticGridQuantWrapper, self).__init__(module_to_wrap, weight_bw, activation_bw, round_mode,scale_mode, quant_scheme,
                                                      is_output_quantized, is_symmetric, num_inputs,
                                                      num_outputs, data_type)
 
@@ -492,6 +491,7 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
         """
 
         # Quantize the inputs
+        # pdb.set_trace()
         torch_inputs = custom_tensor_utils.to_torch_tensor(inputs)
         quantized_inputs = self._quantize_activation(self.input_quantizers, torch_inputs)
 
@@ -535,7 +535,6 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
         """
         Quantizes and dequantizes a parameter
         """
-
         def quantize_dequantize(name: str, param: torch.nn.Parameter, is_replica: bool):
             """
             Quantize dequantize param
@@ -560,12 +559,21 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
                 # else we should use whatever the user desires (i.e.. stochastic rounding is a valid option)
                 if self.training:
                     round_mode = param_quantizer.round_mode
+                    scale_mode = param_quantizer.scale_mode
                 else:
-                    round_mode = libpymo.RoundingMode.ROUND_NEAREST
+                    ############## Original setting################
+                    # round_mode = libpymo.RoundingMode.ROUND_NEAREST 
+                    ############## Original setting################
+
+                    round_mode = param_quantizer.round_mode
+                    scale_mode = param_quantizer.scale_mode
+
                 if is_replica:
                     param.data = param_quantizer.quantize_dequantize(param.data.clone(), round_mode)
                 else:
-                    param.data = param_quantizer.quantize_dequantize(param.data, round_mode)
+                    # pdb.set_trace()
+
+                    param.data = param_quantizer.quantize_dequantize(param.data, round_mode, scale_mode)
 
         shadow_params = {}
 
@@ -616,19 +624,18 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
         :param tensors_to_quantize: Inputs passed to the module in the forward pass
         :return: Quantized output from the wrapped module
         """
+        # pdb.set_trace()
+        outputs = []
+        for index, input_tensor in enumerate(tensors_to_quantize):
+            assert len(tensor_quantizers) > index, \
+                f"Not enough tensor quantizers ({len(tensor_quantizers)}) allocated"
 
-        def inner_quantization(input_tensor, index):
-            if isinstance(input_tensor, (List, Tuple)):
-                inner_outputs = []
-                for inner_input in input_tensor:
-                    inner_outputs.append(inner_quantization(inner_input, index))
-                return inner_outputs
-
-            if isinstance(input_tensor, utils.dtypes_to_ignore_for_quantization) or \
-                    input_tensor.dtype in utils.torch_dtypes_to_ignore_for_quantization or \
+            if isinstance(input_tensor, utils.dtypes_to_ignore_for_quantization) or\
+                    input_tensor.dtype in utils.torch_dtypes_to_ignore_for_quantization or\
                     not tensor_quantizers[index].enabled:
                 # Do not quantize tensors of integer or bool data type or if the quantizer is disabled.
-                return input_tensor
+                outputs.append(input_tensor)
+                continue
 
             if not isinstance(input_tensor, torch.Tensor):
                 error_msg = f'Expecting quantize activation input of type torch.Tensor but got {type(input_tensor)}'
@@ -652,21 +659,21 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
                 # else we should use whatever the user desires (i.e.. stochastic rounding is a valid option)
                 if self.training:
                     round_mode = tensor_quantizers[index].round_mode
+                    scale_mode = tensor_quantizers[index].scale_mode
                 else:
-                    round_mode = libpymo.RoundingMode.ROUND_NEAREST
-                output = tensor_quantizers[index].quantize_dequantize(input_tensor, round_mode)
+                    ############## Original setting################
+                    # round_mode = libpymo.RoundingMode.ROUND_NEAREST 
+                    ###############################################
+
+                    round_mode = tensor_quantizers[index].round_mode
+                    scale_mode = tensor_quantizers[index].scale_mode
+
+                output = tensor_quantizers[index].quantize_dequantize(input_tensor, round_mode, scale_mode)
 
             else:
                 output = input_tensor
 
-            return output
-
-        outputs = []
-        for index, input_tensor in enumerate(tensors_to_quantize):
-            assert len(tensor_quantizers) > index, \
-                f"Not enough tensor quantizers ({len(tensor_quantizers)}) allocated"
-
-            outputs.append(inner_quantization(input_tensor, index))
+            outputs.append(output)
 
         return outputs
 
@@ -691,8 +698,6 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
                                                                   enabled_by_default=param_quantizer.enabled,
                                                                   ch_axis=channel_axis,
                                                                   data_type=param_quantizer.data_type)
-            per_channel_quantizer.use_strict_symmetric = param_quantizer.use_strict_symmetric
-            per_channel_quantizer.use_unsigned_symmetric = param_quantizer.use_unsigned_symmetric
 
             new_param_quant_dict[param_name] = per_channel_quantizer
         self.param_quantizers = new_param_quant_dict

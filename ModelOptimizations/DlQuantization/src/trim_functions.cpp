@@ -59,10 +59,77 @@ inline double randUniformCpu()
     return rand() / (RAND_MAX + static_cast<double>(1.0));
 }
 
-double computeDelta(double encodingMin, double encodingMax, double numSteps)
+double computeDelta(double encodingMin, double encodingMax, double numSteps, ScalingMode scaling_mode)
 {
+    // std::vector<double> _scale = {1., 0.5                        ,
+    //    0.25                       , 0.125                      ,
+    //    0.0625                     , 0.03125                    ,
+    //    0.015625                   , 0.0078125                  ,
+    //    0.00390625                 , 0.001953125                ,
+    //    0.0009765625               , 0.00048828125              ,
+    //    0.000244140625             , 0.0001220703125            ,
+    //    0.00006103515625           , 0.000030517578125          ,
+    //    0.0000152587890625         , 0.00000762939453125        ,
+    //    0.000003814697265625       , 0.0000019073486328125      ,
+    //    0.00000095367431640625     , 0.000000476837158203125    ,
+    //    0.0000002384185791015625   , 0.00000011920928955078125  ,
+    //    0.00000005960464477539063  , 0.000000029802322387695312 ,
+    //    0.000000014901161193847656 , 0.000000007450580596923828 ,
+    //    0.000000003725290298461914 , 0.000000001862645149230957 ,
+    //    0.0000000009313225746154785, 0.0000000004656612873077393};
+    
     double delta = (encodingMax - encodingMin) / numSteps;
-    return delta;
+    // printf("%d\n", scaling_mode);
+    switch (scaling_mode)
+    {
+
+
+
+        case SCALE_POW2:
+        {
+            double _diff;
+            double _min; 
+            int _idx;
+            int i;
+            for(i=0;i<32;i++){
+                _diff= abs(pow(2,-i) - delta);
+
+                if (i == 0){
+                    _min = _diff;
+                    _idx = i;
+                    }
+                else {
+                    if (_diff < _min){
+                        _min = _diff;
+                        _idx = i;
+                    }
+                }
+
+            }
+            // printf("==========%d===========\n", _idx);
+
+            // return _scale[_idx];
+            return pow(2, -_idx);
+
+
+        }
+
+        case SCALE_ORI:
+        {
+
+
+            return delta;
+
+        }
+    }
+
+
+
+
+
+
+
+
 }
 
 
@@ -95,6 +162,7 @@ template <typename DTYPE>
 void quantizeDequantize(const DTYPE* in, int cnt, const TfEncoding& encoding, DTYPE* out,
                         ComputationMode mode_cpu_gpu, RoundingMode rounding_mode)
 {
+    // printf("=========%d==========\n", mode_cpu_gpu);
     switch (mode_cpu_gpu)
     {
     case COMP_MODE_CPU:
@@ -147,22 +215,35 @@ inline void quantizeValueCpu(const DTYPE* in, DTYPE* out,
     *out = fmax(fmin(*in, encoding_max), encoding_min);
     // Scale and add offset to get something in the range [0,2^bw-1]
     *out = *out / encoding_delta - encoding_offset;
+    // printf("%d\n", rounding_mode);
 
     switch (rounding_mode)
     {
+
+
+
         case ROUND_NEAREST:
         {
             *out = round(*out);
+            // *out = floor(*out);
             break;
         }
         case ROUND_STOCHASTIC:
         {
             *out = floor(*out + randUniformCpu());
+            // *out = floor(*out);
+            // printf("hi\n");
+
+            break;
+        }
+        case ROUND_FLOOR:
+        {
+            *out = floor(*out);
             break;
         }
         default:
         {
-            throw runtime_error("Unknown rounding mode.");
+            throw runtime_error("Unknown roundinggg mode.");
         }
     }
 }
@@ -257,6 +338,7 @@ void quantizeToFxpPackedCpu(const DTYPE* in, int cnt, const TfEncoding& encoding
             data_quantized = data_quantized / encoding.delta - encoding.offset;
 
             // Round
+            // printf("%d\n", rounding_mode);
             switch (rounding_mode)
             {
             case ROUND_NEAREST:
@@ -267,6 +349,11 @@ void quantizeToFxpPackedCpu(const DTYPE* in, int cnt, const TfEncoding& encoding
             case ROUND_STOCHASTIC:
             {
                 data_quantized = floor(data_quantized + randUniformCpu());
+                break;
+            }
+            case ROUND_FLOOR:
+            {
+                data_quantized = floor(data_quantized);
                 break;
             }
             default:

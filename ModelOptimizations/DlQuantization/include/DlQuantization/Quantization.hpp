@@ -146,7 +146,14 @@ enum LayerInOut
 enum RoundingMode
 {
     ROUND_NEAREST,
-    ROUND_STOCHASTIC
+    ROUND_STOCHASTIC,
+    ROUND_FLOOR
+};
+
+enum ScalingMode
+{
+    SCALE_POW2,
+    SCALE_ORI
 };
 
 }   // End of namespace DlQuantization.
