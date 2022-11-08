@@ -35,7 +35,8 @@
 # =============================================================================
 """ Utilities that are used for different AIMET PyTorch features """
 
-from typing import List, Tuple, Union, Dict
+import itertools
+from typing import List, Tuple, Union, Dict, Callable, Any
 import contextlib
 import os
 import pickle
@@ -52,7 +53,7 @@ import aimet_common.libpymo as libpymo
 
 logger = AimetLogger.get_area_logger(AimetLogger.LogAreas.Utils)
 
-dtypes_to_ignore_for_quantization = (int, float, bool)
+dtypes_to_ignore_for_quantization = (int, float, bool, str, tuple, type(None))
 torch_dtypes_to_ignore_for_quantization = [torch.int, torch.int8, torch.int16, torch.int32, torch.int64, torch.bool]
 
 
@@ -80,13 +81,17 @@ class ModuleData:
     """
     Collect input and output data to and from module
     """
-    def __init__(self, model: torch.nn.Module, module: torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, module: torch.nn.Module,
+                 forward_fn: Callable[[torch.nn.Module, Any], Any] = None):
         """
         :param model: Pytorch model
         :param module: Module reference
+        :param forward_fn: Adapter function that performs forward pass given a model and inputs
+         yielded from the data loader.
         """
         self._model = model
         self._module = module
+        self._forward_fn = forward_fn or self.default_forward_fn
 
     def collect_inp_out_data(self, model_input: Union[torch.tensor, List[torch.Tensor], Tuple[torch.Tensor]],
                              collect_input: bool, collect_output: bool) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -121,13 +126,10 @@ class ModuleData:
         # place the input to appropriate device
         model_input = change_tensor_device_placement(model_input, device)
 
-        if isinstance(model_input, torch.Tensor):
-            model_input = [model_input]
-
+        # Custom injected exception is raised when the activations data from desired module is collected.
         try:
             with in_eval_mode(self._model), torch.no_grad():
-                _ = self._model(*model_input)
-
+                _ = self._forward_fn(self._model, model_input)
         except StopForwardException:
             pass
 
@@ -143,6 +145,25 @@ class ModuleData:
             out_data = out_data_list[0].detach()
 
         return inp_data, out_data
+
+    @staticmethod
+    def default_forward_fn(model: torch.nn.Module,
+                           inputs: Union[torch.tensor, List[torch.Tensor], Tuple[torch.Tensor]]):
+        """
+        Default forward function that performs forward pass given a model and inputs yielded from
+        the data loader. Data loader which yields torch.Tensor object that can be directly
+        passed into the model, or a data loader which yields a tuple of length two where its
+        first element can be directly passed into the model.
+
+        :param model: PyTorch model.
+        :param inputs: Inputs passed to model.
+        """
+        # When provided dataloader is labeled (model_inputs, labels), then ignore the second element (labels).
+        if isinstance(inputs, (list, tuple)):
+            inputs, _ = inputs
+        if isinstance(inputs, torch.Tensor):
+            inputs = [inputs]
+        model(*inputs)
 
 
 class CachedDataset(Dataset):
@@ -162,11 +183,10 @@ class CachedDataset(Dataset):
             raise ValueError(f'Can not fetch {num_batches} batches from '
                              f'a data loader of length {len(data_loader)}.')
 
-        self._data_loader = data_loader
         self._num_batches = num_batches
         self._path = path
 
-        self._cache_model_inputs()
+        self._cache_model_inputs(itertools.islice(data_loader, num_batches))
 
     def __len__(self):
         return self._num_batches
@@ -179,18 +199,14 @@ class CachedDataset(Dataset):
 
         return batch
 
-    def _cache_model_inputs(self):
+    def _cache_model_inputs(self, data_loader):
         """
         Function to cache number of batches individually in separate file at provided path location
         """
         if not os.path.exists(self._path):
             os.makedirs(self._path)
 
-        for i, batch in enumerate(self._data_loader):
-            # batch is of shape (model_inputs, labels)
-            if isinstance(batch, (tuple, list)):
-                batch, _ = batch
-
+        for i, batch in enumerate(data_loader):
             path = os.path.join(self._path, f'model_inputs_{i}')
             with open(path, 'wb') as file:
                 pickle.dump(batch, file)
@@ -320,14 +336,15 @@ def create_fake_data_loader(dataset_size: int, batch_size: int, image_size=(1, 2
     return data_loader
 
 
-def get_module_to_name_dict(model: torch.nn.Module) -> Dict[torch.nn.Module, str]:
+def get_module_to_name_dict(model: torch.nn.Module, prefix: str = '') -> Dict[torch.nn.Module, str]:
     """
     Get a dictionary mapping model modules to names
     :param model: Model to get mapping for
+    :param prefix: Prefix string to prepend to names
     :return: Dictionary mapping model modules to names
     """
     module_to_name_dict = {}
-    for name, module in model.named_modules():
+    for name, module in model.named_modules(prefix=prefix):
         module_to_name_dict[module] = name
     return module_to_name_dict
 
@@ -395,7 +412,7 @@ def get_input_shape_batch_size(data_loader):
     :param data_loader: Iterates over data set
     :return: returns batch size and shape of one image
     """
-    for _, (images_in_one_batch, _) in enumerate(data_loader):
+    for _, (images_in_one_batch, *_) in enumerate(data_loader):
         # finding shape of a batch
         input_shape = torch.Tensor.size(images_in_one_batch)
 
@@ -427,18 +444,22 @@ def get_one_positions_in_binary_mask(mask):
 
 def get_ordered_list_of_modules(model: torch.nn.Module, dummy_input: Union[torch.Tensor, Tuple]) -> List:
     """
-    Finds order of nodes in graph
-    :param model: model
+    Finds ordered modules in given model.
+    :param model: PyTorch model.
     :param dummy_input: Dummy input to the model. Used to parse model graph.
-    :return: List of names in graph in order
+    :return: List of module name, module in order.
     """
     def _hook_to_collect_name_of_module(module, _, __):
         """
         hook to find name of module
         """
-        for name, module_ref in model.named_modules():
-            if module is module_ref:
-                list_modules.append([name, module])
+        module_name = module_to_name_dict[module]
+        list_modules.append([module_name, module])
+
+    module_to_name_dict = {}
+    for name, module in model.named_modules():
+        module_to_name_dict[module] = name
+
     list_modules = []
     run_hook_for_layers_with_given_input(model, dummy_input, hook=_hook_to_collect_name_of_module)
 
@@ -458,16 +479,31 @@ def replace_modules_of_type1_with_type2(model: torch.nn.Module,
     """
 
     for module_name, module_ref in model.named_children():
-
         if isinstance(module_ref, type1):
-            if type1 is torch.nn.MultiheadAttention:
-                setattr(model, module_name, type2(module_ref.embed_dim, module_ref.num_heads))
-            else:
-                setattr(model, module_name, type2())
+            setattr(model, module_name, type2())
 
         children_module_list = list(module_ref.modules())
         if len(children_module_list) != 1:
             replace_modules_of_type1_with_type2(module_ref, type1, type2)
+
+
+def replace_modules_of_type1_using_constructor(model, type1, constructor):
+    """
+    Given a model, finds all modules of type type1 and replaces them with the module created with constructor
+    constructor should accept original module as an argument
+    :param model: Model to replace modules in
+    :param type1: Module type of modules to replace
+    :param constructor: Constructor of the new module
+    :return: None
+    """
+
+    for module_name, module_ref in model.named_children():
+        if isinstance(module_ref, type1):
+            setattr(model, module_name, constructor(module_ref))
+
+        children_module_list = list(module_ref.modules())
+        if len(children_module_list) != 1:
+            replace_modules_of_type1_using_constructor(module_ref, type1, constructor)
 
 
 def replace_modules_with_instances_of_new_type(model: torch.nn.Module, modules_to_replace_list: List[torch.nn.Module],
@@ -540,6 +576,7 @@ def change_tensor_device_placement(tensor_data: Union[torch.tensor, List, Tuple]
     :param device: device information
     :return: tensor_data with modified device placement
     """
+    assert isinstance(tensor_data, (torch.Tensor, list, tuple))
 
     if isinstance(tensor_data, torch.Tensor):
         tensor_data = tensor_data.to(device=device)

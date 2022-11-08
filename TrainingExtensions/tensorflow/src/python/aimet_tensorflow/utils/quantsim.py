@@ -47,12 +47,9 @@ from aimet_tensorflow.common.operation import Op
 from aimet_tensorflow.common import core
 from aimet_tensorflow.defs import ParameterInfo
 from aimet_tensorflow.quantsim_config.quantsim_config import OpToQuantOpsDictType
+from aimet_tensorflow.utils.constants import QUANT_ALLOWED_DTYPES
 
 _logger = AimetLogger.get_area_logger(AimetLogger.LogAreas.Quant)
-
-DTYPES_QUANTIZE_NOT_REQUIRED = [tf.dtypes.int8, tf.dtypes.uint8, tf.dtypes.int16, tf.dtypes.uint16,
-                                tf.dtypes.int32, tf.dtypes.uint32, tf.dtypes.int64, tf.dtypes.uint64,
-                                tf.bool, tf.dtypes.string, tf.dtypes.resource]
 
 
 def get_param_quantizer(op: tf.Operation, index: int) -> tf.Operation:
@@ -206,7 +203,7 @@ def is_op_quantizable(op: tf.Operation) -> bool:
     """
 
     if op.outputs:
-        if op.outputs[0].dtype not in DTYPES_QUANTIZE_NOT_REQUIRED:
+        if op.outputs[0].dtype in QUANT_ALLOWED_DTYPES:
             return True
 
     return False
@@ -255,21 +252,17 @@ def create_encoding_from_dict(encoding_dict: dict) -> (Union[libpymo.TfEncoding,
         enc.delta = delta_enc
         return enc
 
+    def _create_tf_encoding_factory(encoding_dict_to_convert) -> List[libpymo.TfEncoding]:
+        return [_create_tf_encoding_object(enc_dict.get('bitwidth'),
+                                           enc_dict.get('max'),
+                                           enc_dict.get('min'),
+                                           enc_dict.get('offset'),
+                                           enc_dict.get('scale')) for enc_dict in encoding_dict_to_convert]
+
     # make a distinction between the per-channel and per-tensor flow
-    if isinstance(encoding_dict.get('max'), List):
-        encoding = []
-        for i in range(len(encoding_dict.get('max'))):
-            encoding.append(_create_tf_encoding_object(encoding_dict.get('bitwidth'),
-                                                       encoding_dict.get('max')[i],
-                                                       encoding_dict.get('min')[i],
-                                                       encoding_dict.get('offset')[i],
-                                                       encoding_dict.get('scale')[i]))
-        is_symmetric = encoding_dict.get('is_symmetric')
-    else:
-        encoding = _create_tf_encoding_object(encoding_dict.get('bitwidth'),
-                                              encoding_dict.get('max'),
-                                              encoding_dict.get('min'),
-                                              encoding_dict.get('offset'),
-                                              encoding_dict.get('scale'))
-        is_symmetric = encoding_dict.get('is_symmetric')
-    return encoding, is_symmetric
+    if isinstance(encoding_dict, List):
+        is_symmetric = encoding_dict[0].get('is_symmetric')
+        return _create_tf_encoding_factory(encoding_dict), is_symmetric
+    is_symmetric = encoding_dict.get('is_symmetric')
+    encoding_dict = [encoding_dict]
+    return _create_tf_encoding_factory(encoding_dict)[0], is_symmetric

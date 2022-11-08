@@ -35,9 +35,8 @@
 #  @@-COPYRIGHT-END-@@
 #
 #=============================================================================
-cmake_minimum_required(VERSION 3.5)
 
-add_library(PyModelOptimizations SHARED
+Python3_add_library(PyModelOptimizations SHARED
         PyModelOptimizations.cpp
         PyTensorQuantizer.cpp)
 
@@ -45,7 +44,6 @@ if (ENABLE_CUDA)
     target_link_libraries(PyModelOptimizations
           PUBLIC
              stdc++
-             PYBIND11
              MoDlQuantization
              MoDlEqualization
              MoDlQuantizationCuda
@@ -61,7 +59,6 @@ else (ENABLE_CUDA)
     target_link_libraries(PyModelOptimizations
             PUBLIC
             stdc++
-            PYBIND11
             MoDlQuantization
             MoDlEqualization
             MoDlCompression
@@ -76,7 +73,7 @@ endif (ENABLE_CUDA)
 set_target_properties(PyModelOptimizations
       PROPERTIES
          OUTPUT_NAME "pymo"
-         SUFFIX ".cpython-${Python_VERSION_MAJOR}${Python_VERSION_MINOR}${ABI_FLAGS}-${ARCHITECTURE}-linux-gnu.so"
+         SUFFIX ".${Python3_SOABI}.so"
          LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/artifacts/aimet_common/"
       )
 

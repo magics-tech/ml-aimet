@@ -1,7 +1,9 @@
+cumm==0.2.8
 holoviews==1.12.7
 matplotlib>=3
+numpy==1.21.0
 onnx
-onnxruntime
 onnxruntime-extensions
+onnxsim
 scikit-learn
 tensorboardX==2.4

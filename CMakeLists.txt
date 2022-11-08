@@ -35,7 +35,7 @@
 #  @@-COPYRIGHT-END-@@
 #
 #=============================================================================
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.17)
 
 project(aimet)
 
@@ -46,11 +46,6 @@ if(NOT DEFINED AIMET_PYTHONPATH)
   set(AIMET_PYTHONPATH "PYTHONPATH=${CMAKE_BINARY_DIR}/artifacts" CACHE STRING "python path")
 endif()
 set(AIMET_PYTHONPATH "${AIMET_PYTHONPATH}:${CMAKE_CURRENT_SOURCE_DIR}/TrainingExtensions/common/src/python")
-
-if(NOT DEFINED AIMET_LD_LIBRARY_PATH)
-  set(AIMET_LD_LIBRARY_PATH "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/artifacts:$ENV{LD_LIBRARY_PATH}")
-  message(STATUS "Set ${AIMET_LD_LIBRARY_PATH} in ${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
 
 # Set the software version from version.txt file (if not already set)
 if(NOT DEFINED SW_VERSION)
@@ -98,11 +93,11 @@ set(OPENCV_LIBRARY /usr/local/lib/libopencv_core.a)
 # Conditional build for PyTorch
 # ----------------------------------
 
-find_package(Python COMPONENTS Interpreter Development)
-set(PYTHON_DIST_PACKAGES "/usr/local/lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/dist-packages/")
-message("Found python: ${Python_FOUND}, at ${Python_LIBRARIES}")
+find_package(Python3 COMPONENTS Interpreter Development)
+set(PYTHON_DIST_PACKAGES "/usr/local/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/dist-packages/")
+message("Found python: ${Python3_FOUND}, at ${Python3_LIBRARIES}")
 EXECUTE_PROCESS( COMMAND "uname" "-m" OUTPUT_VARIABLE ARCHITECTURE OUTPUT_STRIP_TRAILING_WHITESPACE)
-execute_process(COMMAND "python" "-c" "import sys; print(sys.abiflags)" OUTPUT_VARIABLE ABI_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "-c" "import sys; print(sys.abiflags)" OUTPUT_VARIABLE ABI_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 if (NOT (DEFINED ENABLE_TORCH))
   message("AIMET Torch build not explicitly disabled. Enabling implicitly")
@@ -112,29 +107,41 @@ endif(NOT (DEFINED ENABLE_TORCH))
 
 if (ENABLE_TORCH)
   set(AIMET_PYTHONPATH "${AIMET_PYTHONPATH}:${CMAKE_CURRENT_SOURCE_DIR}/TrainingExtensions/torch/src/python:${CMAKE_CURRENT_SOURCE_DIR}/TrainingExtensions/onnx/src/python")
-
-  # If we enable PyTorch builds then use the pybind11 headers that are part of the torch pip install
-  # So we don't have a version mismatch - between PyTorch custom C++ op code and PyMO
-  list(APPEND PYBIND11_INC_DIRS "${PYTHON_DIST_PACKAGES}/torch/include")
-  list(APPEND PYBIND11_INC_DIRS ${Python_INCLUDE_DIRS})
-
+  execute_process(COMMAND ${Python3_EXECUTABLE} "-c" "import torch;print(torch.utils.cmake_prefix_path)"
+                  RESULT_VARIABLE TORCH_NOT_FOUND
+                  OUTPUT_VARIABLE TORCH_CMAKE_DIR
+                  OUTPUT_STRIP_TRAILING_WHITESPACE
+                  )
+  find_package(Torch REQUIRED PATHS ${TORCH_CMAKE_DIR} NO_DEFAULT_PATH)
+  get_filename_component(TORCH_DIR ${TORCH_CMAKE_DIR}/../../ ABSOLUTE)
 else (ENABLE_TORCH)
-  list(APPEND PYBIND11_INC_DIRS "${PYTHON_DIST_PACKAGES}/pybind11/include/")
-  list(APPEND PYBIND11_INC_DIRS ${Python_INCLUDE_DIRS})
-
   message("AIMET Torch build disabled")
-
 endif (ENABLE_TORCH)
 
 # ----------------------------------
 # PyBind11
 # ----------------------------------
+execute_process(COMMAND ${Python3_EXECUTABLE} "-c" "import pybind11;print(pybind11.get_include())"
+                RESULT_VARIABLE PYBIND11_NOT_FOUND
+                OUTPUT_VARIABLE PYBIND11_INCLUDE_DIRS
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                )
+# If we enable PyTorch builds then use the pybind11 headers that are part of the torch pip install
+# So we don't have a version mismatch - between PyTorch custom C++ op code and PyMO
+find_path(PYBIND11_INCLUDE "pybind11.h"
+          PATHS ${TORCH_INCLUDE_DIRS} ${PYBIND11_INCLUDE_DIRS}
+          PATH_SUFFIXES "pybind11"
+          REQUIRED
+          NO_DEFAULT_PATH
+        )
+get_filename_component(PYBIND11_INC_DIRS ${PYBIND11_INCLUDE} DIRECTORY)
 
 add_library(PYBIND11 SHARED IMPORTED)
 
 set_target_properties(PYBIND11 PROPERTIES
-        IMPORTED_LOCATION ${Python_LIBRARIES}
+        IMPORTED_LOCATION ${Python3_LIBRARIES}
         INTERFACE_INCLUDE_DIRECTORIES "${PYBIND11_INC_DIRS}"
+        INTERFACE_LINK_LIBRARIES Python3::Module
         )
 
 # ----------------------------------
@@ -150,9 +157,9 @@ endif(NOT (DEFINED ENABLE_TENSORFLOW))
 if (ENABLE_TENSORFLOW)
   if(NOT DEFINED TF_LIB_DIR)
     # Get location of TensorFlow library
-    execute_process(COMMAND "python" "-c" "import tensorflow as tf; print(tf.sysconfig.get_lib())" OUTPUT_VARIABLE TF_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "-c" "import tensorflow as tf; print(tf.sysconfig.get_lib())" OUTPUT_VARIABLE TF_LIB_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
     # Get Tensorflow version
-    execute_process(COMMAND "python" "-c" "import tensorflow as tf; print(tf.__version__)" OUTPUT_VARIABLE TF_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "-c" "import tensorflow as tf; print(tf.__version__)" OUTPUT_VARIABLE TF_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE)
     message(STATUS "Found TensorFlow version: ${TF_VERSION} TensorFlow library path: ${TF_LIB_DIR}")
   else(TF_LIB_DIR)
     message(STATUS "TensorFlow version and TensorFlow library already set.")
@@ -195,6 +202,18 @@ else()
   message(STATUS "Set ${AIMET_PYTHONPATH} in ${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+# FIXME
+# Better to include patchefl into docker image, although seems it is not trivial
+include(FetchContent)
+FetchContent_Declare(patchelf
+    URL "https://github.com/NixOS/patchelf/releases/download/0.15.0/patchelf-0.15.0-x86_64.tar.gz"
+)
+if(NOT patchelf_POPULATED)
+    FetchContent_Populate(patchelf)
+    set(PATCHELF_EXE ${patchelf_SOURCE_DIR}/bin/patchelf)
+    message(STATUS "patchelf: ${PATCHELF_EXE}")
+endif()
+
 # -------------------------------
 # Generate pip packages
 # -------------------------------
@@ -221,7 +240,7 @@ if(NOT remote_url STREQUAL "")
     # Run the install target first
     COMMAND "${CMAKE_COMMAND}" --build . --target install
     # Now run the packaging target to generate wheel files
-    COMMAND ${CMAKE_COMMAND} -DAIMET_PACKAGE_PATH=${AIMET_PACKAGE_PATH} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR} -DENABLE_CUDA=${ENABLE_CUDA} -DENABLE_TENSORFLOW=${ENABLE_TENSORFLOW} -DENABLE_TORCH=${ENABLE_TORCH} -P ${CMAKE_CURRENT_SOURCE_DIR}/packaging/package_aimet.cmake
+    COMMAND ${CMAKE_COMMAND} -DAIMET_PACKAGE_PATH=${AIMET_PACKAGE_PATH} -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR} -DENABLE_CUDA=${ENABLE_CUDA} -DENABLE_TENSORFLOW=${ENABLE_TENSORFLOW} -DENABLE_TORCH=${ENABLE_TORCH} -DPATCHELF_EXE=${PATCHELF_EXE} -P ${CMAKE_CURRENT_SOURCE_DIR}/packaging/package_aimet.cmake
   )
 else()
   message(STATUS "Repo Remote URL is blank. Skipping packageaimet target")

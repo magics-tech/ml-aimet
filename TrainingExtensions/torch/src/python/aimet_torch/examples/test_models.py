@@ -38,16 +38,22 @@
 """ Models for use in unit testing """
 
 # pylint: skip-file
+from collections import namedtuple
+from typing import Dict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import nn as nn
+from torchvision.ops import roi_align
 
 import aimet_torch.elementwise_ops as aimet_elementwise
 
 
 # pylint: disable=too-many-instance-attributes
+from aimet_torch.elementwise_ops import Multiply
+
+
 class SingleResidual(nn.Module):
     """ A model with a single residual connection.
         Use this model for unit testing purposes. """
@@ -74,6 +80,61 @@ class SingleResidual(nn.Module):
         self.avgpool = nn.AvgPool2d(3, stride=1)
         self.conv4 = nn.Conv2d(32, 8, kernel_size=2, stride=2, padding=2, bias=True)
         self.ada = nn.AdaptiveAvgPool2d(5)
+        self.fc = nn.Linear(72, num_classes)
+
+    def forward(self, *inputs):
+        x = self.conv1(inputs[0])
+        x = self.bn1(x)
+        x = self.relu1(x)
+        x = self.maxpool(x)
+
+        # Save the output of MaxPool as residual.
+        residual = x
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        x = self.conv3(x)
+
+        # Add the residual
+        # AdaptiveAvgPool2d is used to get the desired dimension before adding.
+        residual = self.conv4(residual)
+        residual = self.ada(residual)
+        x += residual
+        x = self.relu3(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+
+class SingleResidualWithAvgPool(nn.Module):
+    """ A model with a single residual connection.
+        Use this model for unit testing purposes. """
+
+    def __init__(self, num_classes=10):
+        super(SingleResidualWithAvgPool, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=2, stride=2, padding=2, bias=False)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.relu1 = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
+        # All layers above are same as ResNet
+        # The output of the MaxPool2d is used as a residual.
+
+        # The following layers are considered as single block.
+        self.conv2 = nn.Conv2d(32, 16, kernel_size=2, stride=2, padding=2, bias=False)
+        self.bn2 = nn.BatchNorm2d(16)
+        self.relu2 = nn.ReLU(inplace=True)
+        self.conv3 = nn.Conv2d(16, 8, kernel_size=2, stride=2, padding=2, bias=False)
+
+        # The output of Conv2d layer above(conv3) is added with the the residual from
+        # MaxPool2d and then fed to the relu layer below.
+        self.relu3 = nn.ReLU(inplace=True)
+
+        self.avgpool = nn.AvgPool2d(3, stride=1)
+        self.conv4 = nn.Conv2d(32, 8, kernel_size=2, stride=2, padding=2, bias=True)
+        self.ada = nn.AvgPool2d(5)
         self.fc = nn.Linear(72, num_classes)
 
     def forward(self, *inputs):
@@ -903,3 +964,45 @@ class LinearAndLSTMModel(torch.nn.Module):
         x = self.prelu(x)
         x = torch.unsqueeze(x, 1)
         return self.recurrent(x, h_and_c)
+
+
+
+class RoiAlignPyTorch(torch.nn.Module):
+
+    def __init__(self, aligned_height, aligned_width, spatial_scale):
+        super(RoiAlignPyTorch, self).__init__()
+        self.aligned_width = int(aligned_width)
+        self.aligned_height = int(aligned_height)
+        self.spatial_scale = float(spatial_scale)
+
+    def forward(self, features, rois):
+        return roi_align(input=features,
+                         boxes = rois,
+                         output_size = [self.aligned_height, self.aligned_width],
+                         spatial_scale = self.spatial_scale,
+                         sampling_ratio = 0)
+
+class RoiModel(torch.nn.Module):
+
+    def __init__(self, height, width, scale):
+        super(RoiModel, self).__init__()
+        self.roi = RoiAlignPyTorch(height, width, scale)
+
+    def forward(self, *inputs):
+        return self.roi(*inputs)
+
+
+class InputOutputDictModel(nn.Module):
+    def __init__(self):
+        super(InputOutputDictModel, self).__init__()
+        self.mul1 = Multiply()
+        self.mul2 = Multiply()
+        self.mul3 = Multiply()
+
+    def forward(self, inputs: Dict[str, torch.Tensor]):
+        ab = self.mul1(inputs['a'], inputs['b'])
+        bc = self.mul2(inputs['b'], inputs['c'])
+        ca = self.mul3(inputs['c'], inputs['a'])
+
+        output_def = namedtuple('output_def', ['ab', 'bc', 'ca'])
+        return output_def(ab, bc, ca)

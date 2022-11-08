@@ -40,7 +40,7 @@
 
 import copy
 from re import search
-from typing import Any, Optional, Dict, Union
+from typing import Any, Optional, Dict, Union, List
 import torch
 import torch.fx
 from aimet_common.utils import AimetLogger
@@ -92,14 +92,14 @@ functional_to_module_map = {
     'mul'           : elementwise_ops.Multiply,
     'div'           : elementwise_ops.Divide,
     'matmul'        : elementwise_ops.MatMul,
-    'interpolate'   : elementwise_ops.Interpolate
 }
 
 functional_to_module_special_handling_map = {
 
     # Operations that require special transformation
     'cat'           : elementwise_ops.Concat,
-    'conv2d'        : torch.nn.Conv2d
+    'interpolate'   : elementwise_ops.Interpolate,
+    'conv2d'        : torch.nn.Conv2d,
 }
 
 
@@ -144,7 +144,7 @@ def conv2d_create_module(node: torch.fx.node) -> torch.nn.Module:
     Create the replacement module.
 
     :param node: Current node in the graph after which new node will be inserted
-    :return:
+    :return: New module.
     """
 
     # Get weight and bias from argument
@@ -250,7 +250,7 @@ def concat_create_module(node: torch.fx.node) -> torch.nn.Module:
     Create the replacement module.
 
     :param node: Current node in the graph after which new node will be inserted
-    :return:
+    :return: New module.
     """
 
     num_args = len(node.args)
@@ -268,15 +268,48 @@ def concat_create_module(node: torch.fx.node) -> torch.nn.Module:
 
     return module
 
+def interpolate_create_node(symbolic_traced_model: torch.fx.GraphModule, module_name: str, node: torch.fx.node)\
+        -> torch.fx.node:
+    """
+    Create the node to be inserted in the graph model for interpolate.
+    :param symbolic_traced_model: Symbolically traced model
+    :param module_name: Qualified module name in symbolic_traced_model hierarchy corresponding to new node
+    :param node: Current node in the graph after which new node will be inserted
+    :return: torch.fx.node to be inserted in the graph
+    """
+    # Merge args and kwargs.
+    args = [node.args[0]]
+    for arg in node.kwargs.values():
+        args.append(arg)
+
+    with symbolic_traced_model.graph.inserting_after(node):
+        new_node = symbolic_traced_model.graph.call_module(module_name, args=tuple(args))
+        return new_node
+
+
+def interpolate_create_module(node: torch.fx.node) -> torch.nn.Module:
+    """
+    Create the replacement module.
+
+    :param node: Current node in the graph after which new node will be inserted
+    :return: New module.
+    """
+    _ = node.kwargs
+    module = elementwise_ops.Interpolate()
+
+    return module
+
 
 special_handler_functions = {
     # Special handling functions for creating node and module
     'cat': {'node_fn': concat_create_node, 'module_fn': concat_create_module},
+    'interpolate': {'node_fn': interpolate_create_node, 'module_fn': interpolate_create_module},
     'conv2d': {'node_fn': conv2d_create_node, 'module_fn': conv2d_create_module}
 }
 
 
-def prepare_model(model: torch.nn.Module, concrete_args: Optional[Dict[str, Any]] = None) -> torch.fx.GraphModule:
+def prepare_model(model: torch.nn.Module, modules_to_exclude: List[torch.nn.Module] = None,
+                  concrete_args: Optional[Dict[str, Any]] = None) -> torch.fx.GraphModule:
     """
     Prepare and modify the pytorch model for AIMET features using torch.FX symbolic tracing API.
 
@@ -355,7 +388,8 @@ def prepare_model(model: torch.nn.Module, concrete_args: Optional[Dict[str, Any]
         model = ModelWithNonTorchFunction().eval()
         model_transformed = prepare_model(model)
 
-    :param model: pytorch Model to be modified
+    :param model: pytorch Model to be modified.
+    :param modules_to_exclude: List of modules to exclude when tracing.
     :param concrete_args: Allows you to partially specialize your function, whether it's to remove control flow or
      data structures. If the model has control flow, torch.fx won't be able to trace the model. Check
      torch.fx.symbolic_trace API in detail.
@@ -363,12 +397,51 @@ def prepare_model(model: torch.nn.Module, concrete_args: Optional[Dict[str, Any]
     """
     model.eval()
     device = get_device(model)
-    # Create a copy of model and keep it on cpu
-    model_copy = copy.deepcopy(model).cpu()
+    symbolic_traced_model = _trace_model(model, modules_to_exclude, concrete_args)
 
-    unique_nodes = set()
+    # Prepare model and perform checks to make sure the graph is well-formed.
+    _prepare_helper(symbolic_traced_model)
+    _verify_symbolic_traced_model(symbolic_traced_model)
+
+    symbolic_traced_model.eval()
+    symbolic_traced_model.to(device)
+    return symbolic_traced_model
+
+
+def _trace_model(model: torch.nn.Module, modules_to_exclude: Optional[List[torch.nn.Module]],
+                 concrete_args: Optional[Dict[str, Any]]):
+    """
+    Overrides the is_leaf_module() method of parent class when modules_to_exclude list is not None.
+
+    :param model: pytorch Model to be modified.
+    :param modules_to_exclude: List of modules to exclude when tracing.
+    :param concrete_args: Concrete arguments that should not be treated as Proxies.
+    :return: Traced model.
+    """
+    class Tracer(torch.fx.Tracer):
+        """
+        Override is_leaf_module() method of parent class.
+        """
+        def is_leaf_module(self, m: torch.nn.Module, module_qualified_name: str) -> bool:
+            if modules_to_exclude and m in modules_to_exclude:
+                return True
+            return super(Tracer, self).is_leaf_module(m, module_qualified_name)
+
     # Symbolic tracing frontend - captures the semantics of the module
-    symbolic_traced_model = torch.fx.symbolic_trace(model_copy, concrete_args)
+    tracer = Tracer()
+    graph = tracer.trace(model, concrete_args=concrete_args)
+    symbolic_traced_model = torch.fx.GraphModule(tracer.root, graph)
+
+    return symbolic_traced_model
+
+
+def _prepare_helper(symbolic_traced_model: torch.fx.GraphModule):
+    """
+    Helper for prepare_model().
+
+    :param symbolic_traced_model: Symbolically traced model.
+    """
+    unique_nodes = set()
 
     # Modify the symbolically traced model by iterating over all the nodes
     for node in symbolic_traced_model.graph.nodes:
@@ -397,13 +470,6 @@ def prepare_model(model: torch.nn.Module, concrete_args: Optional[Dict[str, Any]
                 logger.info("Reused/Duplicate   : Adding new module for node: {%s} ", node.name)
         else:
             unique_nodes.add(node.target)
-
-    # Perform some checks to make sure the graph is well formed
-    _verify_symbolic_traced_model(symbolic_traced_model)
-
-    symbolic_traced_model.eval()
-    symbolic_traced_model.to(device)
-    return symbolic_traced_model
 
 
 def _verify_symbolic_traced_model(symbolic_traced_model: torch.fx.GraphModule):

@@ -41,6 +41,7 @@ import json
 import random
 import os
 import re
+import shutil
 import copy
 import numpy as np
 import onnx
@@ -67,6 +68,8 @@ from aimet_torch.adaround.adaround_weight import Adaround, AdaroundParameters
 from aimet_torch import bias_correction
 from aimet_torch.meta import connectedgraph_utils
 from aimet_torch.model_preparer import prepare_pt_transformer_for_quantsim
+from aimet_torch import onnx_utils
+
 
 def train(model: torch.nn.Module, data_loader: DataLoader) -> torch.Tensor:
     """
@@ -247,17 +250,17 @@ class TestFX:
         print(quant_sim_for_modified_model)
 
         # Conv --> ReLU supergroup is detected correctly
-        assert quant_sim_for_modified_model.model.conv1.output_quantizer.enabled == False
-        assert quant_sim_for_modified_model.model.module_relu.output_quantizer.enabled == True
+        assert quant_sim_for_modified_model.model.conv1.output_quantizers[0].enabled == False
+        assert quant_sim_for_modified_model.model.module_relu.output_quantizers[0].enabled == True
 
-        assert quant_sim_for_modified_model.model.conv2.output_quantizer.enabled == False
-        assert quant_sim_for_modified_model.model.module_relu_1.output_quantizer.enabled == True
+        assert quant_sim_for_modified_model.model.conv2.output_quantizers[0].enabled == False
+        assert quant_sim_for_modified_model.model.module_relu_1.output_quantizers[0].enabled == True
 
-        assert quant_sim_for_modified_model.model.fc1.output_quantizer.enabled == False
-        assert quant_sim_for_modified_model.model.module_relu_2.output_quantizer.enabled == True
+        assert quant_sim_for_modified_model.model.fc1.output_quantizers[0].enabled == False
+        assert quant_sim_for_modified_model.model.module_relu_2.output_quantizers[0].enabled == True
 
-        assert quant_sim_for_modified_model.model.fc2.output_quantizer.enabled == False
-        assert quant_sim_for_modified_model.model.module_relu_3.output_quantizer.enabled == True
+        assert quant_sim_for_modified_model.model.fc2.output_quantizers[0].enabled == False
+        assert quant_sim_for_modified_model.model.module_relu_3.output_quantizers[0].enabled == True
 
     def test_fx_with_functional_relu_quantsim_eval(self):
         """
@@ -295,10 +298,10 @@ class TestFX:
                                                             config_file='./data/quantsim_config.json')
 
         # Disable output activation quantizer for ReLUs to compare with original quantsim.model eval
-        quant_sim_for_modified_model.model.module_relu.output_quantizer.enabled = False
-        quant_sim_for_modified_model.model.module_relu_1.output_quantizer.enabled = False
-        quant_sim_for_modified_model.model.module_relu_2.output_quantizer.enabled = False
-        quant_sim_for_modified_model.model.module_relu_3.output_quantizer.enabled = False
+        quant_sim_for_modified_model.model.module_relu.output_quantizers[0].enabled = False
+        quant_sim_for_modified_model.model.module_relu_1.output_quantizers[0].enabled = False
+        quant_sim_for_modified_model.model.module_relu_2.output_quantizers[0].enabled = False
+        quant_sim_for_modified_model.model.module_relu_3.output_quantizers[0].enabled = False
 
         quant_sim_for_original_model.compute_encodings(evaluate, input_tensor)
         quant_sim_for_modified_model.compute_encodings(evaluate, input_tensor)
@@ -308,8 +311,8 @@ class TestFX:
                               quant_sim_for_modified_model.model(input_tensor))
 
         # Compare encodings for last layer for both models
-        assert quant_sim_for_original_model.model.fc2.output_quantizer.encoding.min ==\
-               quant_sim_for_modified_model.model.fc2.output_quantizer.encoding.min
+        assert quant_sim_for_original_model.model.fc2.output_quantizers[0].encoding.min ==\
+               quant_sim_for_modified_model.model.fc2.output_quantizers[0].encoding.min
 
         if os.path.exists('./data/quantsim_config.json'):
             os.remove('./data/quantsim_config.json')
@@ -332,8 +335,8 @@ class TestFX:
 
         # Add + ReLU Supergroup
         # Add's output quantizer should be disabled, and ReLU's output quantizer should be enabled
-        assert quant_sim_for_modified_model.model.module_add.output_quantizer.enabled == False
-        assert quant_sim_for_modified_model.model.relu3.output_quantizer.enabled == True
+        assert quant_sim_for_modified_model.model.module_add.output_quantizers[0].enabled == False
+        assert quant_sim_for_modified_model.model.relu3.output_quantizers[0].enabled == True
 
     def test_fx_with_functional_relu_training(self):
         """
@@ -905,7 +908,7 @@ class TestFX:
         assert isinstance(model_transformed.module_cat, elementwise_ops.Concat)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_cat.output_quantizer.enabled == True
+        assert quant_sim.model.module_cat.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_subtract(self):
         """
@@ -962,7 +965,7 @@ class TestFX:
         assert isinstance(model_transformed.module_mul, elementwise_ops.Multiply)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_mul.output_quantizer.enabled == True
+        assert quant_sim.model.module_mul.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_div(self):
         """
@@ -992,7 +995,7 @@ class TestFX:
         assert isinstance(model_transformed.module_div, elementwise_ops.Divide)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_div.output_quantizer.enabled == True
+        assert quant_sim.model.module_div.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_matmul(self):
         """
@@ -1011,7 +1014,7 @@ class TestFX:
                 return x
 
         input_shape = (1, 3, 8, 8)
-        input_tensor = [torch.randn(*input_shape), torch.randn(*input_shape)]
+        input_tensor = (torch.randn(*input_shape), torch.randn(*input_shape))
         model = ModelWithMatMulOp().eval()
         model_transformed = prepare_model(model)
         print(model_transformed)
@@ -1022,7 +1025,7 @@ class TestFX:
         assert isinstance(model_transformed.module_matmul, elementwise_ops.MatMul)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_matmul.output_quantizer.enabled == True
+        assert quant_sim.model.module_matmul.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_cat_default_dim(self):
         """
@@ -1052,7 +1055,7 @@ class TestFX:
         assert isinstance(model_transformed.module_cat, elementwise_ops.Concat)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_cat.output_quantizer.enabled == True
+        assert quant_sim.model.module_cat.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_cat_input_as_list_and_dim_as_kwargs(self):
         """
@@ -1082,7 +1085,7 @@ class TestFX:
         assert isinstance(model_transformed.module_cat, elementwise_ops.Concat)
 
         quant_sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
-        assert quant_sim.model.module_cat.output_quantizer.enabled == True
+        assert quant_sim.model.module_cat.output_quantizers[0].enabled == True
 
     def test_fx_with_elementwise_scalar_add(self):
         """
@@ -1309,6 +1312,56 @@ class TestFX:
         find_gelus = list(filter(r.match, ops_with_missing_modules))
         assert (not find_gelus)
 
+    def test_fx_with_interpolate_dynamic_inferred(self):
+        """ test torch fx with interpolate functional with size dynamically inferred """
+        class ModelWithInterpolate(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.conv = torch.nn.Conv2d(3, 4, kernel_size=2, stride=2, padding=2)
+
+            def forward(self, x):
+                x = self.conv(x)
+                x = torch.nn.functional.interpolate(x, size=(x.size(2),  x.size(3)), mode='bilinear', align_corners=True)
+                x = torch.nn.functional.interpolate(x, align_corners=False, size=(x.size(2), x.size(3)), mode='bicubic')
+                x = torch.nn.functional.interpolate(x, (x.size(2), x.size(3)), None, 'nearest', None, None)
+                x = torch.nn.functional.interpolate(x, (x.size(2), x.size(3)), mode='bilinear')
+                x = torch.nn.functional.interpolate(x, scale_factor=2)
+                return x
+
+        input_shape = (1, 3, 32, 32)
+        dummy_input = torch.randn(input_shape)
+        model = ModelWithInterpolate().eval()
+        model_transformed = prepare_model(model)
+        print(model_transformed)
+
+        # Verify bit exact outputs.
+        assert torch.equal(model_transformed(dummy_input), model(dummy_input))
+        assert isinstance(model_transformed.module_interpolate, elementwise_ops.Interpolate)
+        assert isinstance(model_transformed.module_interpolate_1, elementwise_ops.Interpolate)
+        assert isinstance(model_transformed.module_interpolate_2, elementwise_ops.Interpolate)
+        assert isinstance(model_transformed.module_interpolate_3, elementwise_ops.Interpolate)
+        assert isinstance(model_transformed.module_interpolate_4, elementwise_ops.Interpolate)
+
+        # Verify with Quantization workflow.
+        sim = QuantizationSimModel(model_transformed, dummy_input=dummy_input)
+        sim.compute_encodings(evaluate, forward_pass_callback_args=dummy_input)
+        sim.model(dummy_input)
+
+        # Verify that activations encodings are correctly exported.
+        results_dir = os.path.abspath('./data/interpolate/')
+        os.makedirs(results_dir, exist_ok=True)
+        try:
+            sim.export(results_dir, filename_prefix='modified_model', dummy_input=dummy_input,
+                       onnx_export_args=(onnx_utils.OnnxExportApiArgs(opset_version=11)))
+            with open(results_dir + '/modified_model.encodings') as json_file:
+                encoding_data = json.load(json_file)
+
+            # Total 7 encodings for activations.
+            assert len(encoding_data["activation_encodings"]) == 7
+        finally:
+            if os.path.isdir(results_dir):
+                shutil.rmtree(results_dir)
+
     def test_fx_with_quantsim_export_and_encodings(self):
         """ test quantsim export and verify encodings are exported correctly for newly added modules """
 
@@ -1337,25 +1390,54 @@ class TestFX:
         # Verify Quantization workflow.
         sim = QuantizationSimModel(model_transformed, dummy_input=input_tensor)
         sim.compute_encodings(evaluate, forward_pass_callback_args=input_tensor)
-        sim.export('./data/', filename_prefix='modified_model', dummy_input=input_tensor)
 
-        with open('./data/modified_model.encodings') as json_file:
-            encoding_data = json.load(json_file)
+        # Verify that activations encodings are correctly exported.
+        results_dir = os.path.abspath('./data/verify_sim_export/')
+        os.makedirs(results_dir, exist_ok=True)
 
-        # Total 6 encodings for activations. two inputs, two outputs of Convs and two outputs of Add modules.
-        assert len(encoding_data["activation_encodings"]) == 6
+        try:
+            sim.export(results_dir, filename_prefix='modified_model', dummy_input=input_tensor)
+            with open(results_dir + '/modified_model.encodings') as json_file:
+                encoding_data = json.load(json_file)
+            # Total 6 encodings for activations. two inputs, two outputs of Convs and two outputs of Add modules.
+            assert len(encoding_data["activation_encodings"]) == 6
+        finally:
+            if os.path.isdir(results_dir):
+                shutil.rmtree(results_dir)
 
-        if os.path.exists('./data/modified_model.pth'):
-            os.remove('./data/modified_model.pth')
+    def test_model_with_exclusion(self):
+        """ test model with exclusion list """
+        class CustomModule(torch.nn.Module):
+            @staticmethod
+            def forward(x):
+                return x * torch.nn.functional.softplus(x).sigmoid()
 
-        if os.path.exists('./data/modified_model.onnx'):
-            os.remove('./data/modified_model.onnx')
+        class CustomModel(torch.nn.Module):
+            def __init__(self):
+                super(CustomModel, self).__init__()
+                self.conv1 = torch.nn.Conv2d(3, 8, kernel_size=2, stride=2, padding=2, bias=False)
+                self.bn1 = torch.nn.BatchNorm2d(8)
+                self.relu1 = torch.nn.ReLU(inplace=True)
+                self.custom = CustomModule()
 
-        if os.path.exists('./data/modified_model.encodings.yaml'):
-            os.remove('./data/modified_model.encodings.yaml')
+            def forward(self, inputs):
+                x = self.conv1(inputs)
+                x = self.relu1(x)
+                x = self.bn1(x)
+                x = self.custom(x)
+                return x
 
-        if os.path.exists('./data/modified_model.encodings'):
-            os.remove('./data/modified_model.encodings')
+        # Create prepared_model without exclusion list.
+        model = CustomModel().eval()
+        prepared = prepare_model(model)
+        assert hasattr(prepared, "module_softplus") and isinstance(getattr(prepared, "module_softplus"), torch.nn.Softplus)
+        assert hasattr(prepared, "module_sigmoid") and isinstance(getattr(prepared, "module_sigmoid"), torch.nn.Sigmoid)
+        assert hasattr(prepared, "module_mul") and isinstance(getattr(prepared, "module_mul"), elementwise_ops.Multiply)
 
-        if os.path.exists('./data/temp_onnx_model_with_markers.onnx'):
-            os.remove('./data/temp_onnx_model_with_markers.onnx')
+        # Creat prepared model with exclusion list.
+        model = CustomModel().eval()
+        prepared = prepare_model(model, modules_to_exclude=[model.custom])
+        assert not hasattr(prepared, "module_softplus")
+        assert not hasattr(prepared, "module_sigmoid")
+        assert not hasattr(prepared, "module_mul")
+        assert hasattr(prepared, "custom")

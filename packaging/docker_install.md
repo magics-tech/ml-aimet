@@ -11,7 +11,8 @@ This page provides instructions to build, install and use the AIMET software in 
 - [Usage examples and documentation](#usage-examples-and-documentation)
 - [Docker information](#docker-information)
   - [Set variant](#set-variant)
-  - [Build docker image manually](#build-docker-image-manually)
+  - [Use prebuilt docker image](#use-prebuilt-docker-image)
+  - [Build docker image locally](#build-docker-image-locally)
   - [Start docker container manually](#start-docker-container-manually)
   - [Build and launch docker using script](#build-and-launch-docker-using-script)
 
@@ -53,7 +54,10 @@ popd
 ```
 
 ## Setup the environment
-In order to build and run AIMET code, several dependencies are required (such as python, cmake, tensorflow, pytorch, etc). Docker files with all prerequisites and dependencies are available [here](../Jenkins). Either install the dependencies on your machine using [these Dockerfiles](../Jenkins) as a guide, or just build and launch the docker using the instructions [here](#docker-information).
+In order to build and run AIMET code, several dependencies are required (such as python, cmake, tensorflow, pytorch, etc). [Docker files](../Jenkins) and [Docker images](https://artifacts.codelinaro.org/ui/native/codelinaro-aimet/aimet-dev) with all prerequisites and dependencies are available for each AIMET variant. Following are the available development options:
+- Use the appropriate [pre-built Docker image](https://artifacts.codelinaro.org/ui/native/codelinaro-aimet/aimet-dev) using the instructions [here](#docker-information). This is the *recommended* option.
+- Build the docker image locally and launch a launch container docker using the instructions [here](#docker-information).
+- Install the dependencies on your machine and setup your environment using [the appropriate Dockerfile](../Jenkins) as a guide.
 
 Set the *common* environment variables as follows:
 ```bash
@@ -65,7 +69,7 @@ Follow these instructions to build the AIMET code:
 
 > NOTE: **If you are inside the docker, set `WORKSPACE="<absolute_path_to_workspace>"` again.**
 ```bash
-cd $WORKSPACE 
+cd $WORKSPACE/aimet
 mkdir build && cd build
 
 # Run cmake (be sure to set the flags in the below command depending on your variant)
@@ -79,28 +83,28 @@ make -j8
 
 After a successful build, install the package using the following instructions:
 ```bash
-cd $WORKSPACE/build
+cd $WORKSPACE/aimet/build
 make install
 ```
-Once the installation step is complete, the AIMET package is created at `$WORKSPACE/build/staging/universal/lib/`.
+Once the installation step is complete, the AIMET package is created at `$WORKSPACE/aimet/build/staging/universal/lib/`.
 
 ## Setup paths
 Setup the package and library paths as follows:
 ```bash
-export PYTHONPATH=$WORKSPACE/build/staging/universal/lib/python:$PYTHONPATH
-export LD_LIBRARY_PATH=$WORKSPACE/build/staging/universal/lib/python:$LD_LIBRARY_PATH
+export PYTHONPATH=$WORKSPACE/aimet/build/staging/universal/lib/python:$PYTHONPATH
+export LD_LIBRARY_PATH=$WORKSPACE/aimet/build/staging/universal/lib/python:$LD_LIBRARY_PATH
 ```
 At this point, we are all set to use AIMET!
 
 ## Usage examples and documentation
-The following steps would generate AIMET documentation including the user guide, examples and API documentation at `$WORKSPACE/build/staging/universal/Docs`:
+The following steps would generate AIMET documentation including the user guide, examples and API documentation at `$WORKSPACE/aimet/build/staging/universal/Docs`:
 
 ```bash
-cd $WORKSPACE/build
+cd $WORKSPACE/aimet/build
 make doc
 ```
 
-To begin navigating the documentation, open the page `$WORKSPACE/build/staging/universal/Docs/user_guide/index.html` on any browser.
+To begin navigating the documentation, open the page `$WORKSPACE/aimet/build/staging/universal/Docs/user_guide/index.html` on any browser.
 
 ## Docker information
 Code may *optionally* be developed inside a development docker container. This section describes how to build a docker image and launch a container using the provided [Dockerfiles](../Jenkins).
@@ -115,8 +119,18 @@ Set the `<variant_string>` to ONE of the following depending on your desired var
 export AIMET_VARIANT=<variant_string>
 ```
 
-### Build docker image manually
-Follow these instructions to build the docker:
+### Use prebuilt docker image
+Follow these instructions to use one of the pre-built docker images:
+```bash
+WORKSPACE="<absolute_path_to_workspace>"
+docker_image_name="artifacts.codelinaro.org/codelinaro-aimet/aimet-dev:latest.${AIMET_VARIANT}"
+docker_container_name="aimet-dev-<any_name>"
+```
+
+> NOTE: Feel free to modify the `docker_container_name` as needed.
+
+### Build docker image locally
+Follow these instructions ONLY if you want to build the docker image locally. If not, skip to the next section.
 ```bash
 WORKSPACE="<absolute_path_to_workspace>"
 docker_image_name="aimet-dev-docker:<any_tag>"
@@ -143,6 +157,7 @@ docker run --rm -it -u $(id -u ${USER}):$(id -g ${USER}) \
 * If nvidia-docker 2.0 is installed, then add `--gpus all` to the `docker run` commands in order to enable GPU access inside the docker container.
 * If nvidia-docker 1.0 is installed, then replace `docker run` with `nvidia-docker run` in order to enable GPU access inside the docker container. 
 * Port forwarding needs to be done in order to run the Visualization APIs from docker container. This can be achieved by running the docker container as follows:
+
 ```bash
 port_id="<any-port-number>"
 
@@ -155,20 +170,23 @@ docker run -p ${port_id}:${port_id} --rm -it -u $(id -u ${USER}):$(id -g ${USER}
 
 ### Build and launch docker using script
 The development docker may also be built and launched in interactive mode using the provided script as follows:
+
+> **_NOTE:_** Add the '-l' option to use the pre-built docker image.
+
 ```
 cd aimet
-./buildntest.sh -e AIMET_VARIANT -i
+./buildntest.sh -e AIMET_VARIANT -i [-l]
 ```
 If additional directories need to be mounted, use `-m` option with list of targeted directories separated by space **surrounded by double quotes `""`**
 ```
 cd aimet
-./buildntest.sh -e AIMET_VARIANT -i -m "sample_dir_1 sample_dir2"
+./buildntest.sh -e AIMET_VARIANT -i -m "sample_dir_1 sample_dir2" [-l]
 ```
 
 To help construct user-specific docker commands, the dry-run option (`-n`) can be used with the above script which prints out the equivalent docker command(s):
 ```
 cd aimet
-./buildntest.sh -e AIMET_VARIANT -i -n
+./buildntest.sh -e AIMET_VARIANT -i -n [-l]
 # OR
-./buildntest.sh -e AIMET_VARIANT -i -n -m "sample_dir_1 sample_dir2"
+./buildntest.sh -e AIMET_VARIANT -i -n -m "sample_dir_1 sample_dir2" [-l]
 ```

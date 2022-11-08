@@ -33,12 +33,6 @@
 #  
 #  @@-COPYRIGHT-END-@@
 #==============================================================================
-cmake_minimum_required(VERSION 3.5)
-
-include_directories(
-      ${gtest_SOURCE_DIR}/include
-      ${gtest_SOURCE_DIR}
-)
 
 add_executable(MoDlCompressionTest
       test_dlcompression_svd.cpp
@@ -57,7 +51,7 @@ target_link_libraries(MoDlCompressionTest
       ${LAPACKE_LIBRARY}
       z
       dl
-      gtest gtest_main
+      gtest_main
       )
 
 

@@ -61,19 +61,18 @@ class TestAdaroundActivationSampler(unittest.TestCase):
     def test_activation_sampler_conv(self):
         """ Test ActivationSampler for a Conv module """
         AimetLogger.set_level_for_all_areas(logging.DEBUG)
-
         model = TinyModel().eval()
-
         sim = QuantizationSimModel(model, dummy_input=torch.randn(1, 3, 32, 32), quant_scheme='tf_enhanced',
                                    default_param_bw=4)
 
         for module in sim.model.modules():
             if isinstance(module, QcQuantizeWrapper):
-                module.output_quantizer.enabled = False
-                module.input_quantizer.enabled = False
+                for quantizer in module.input_quantizers + module.output_quantizers:
+                    quantizer.enabled = False
+                    quantizer.enabled = False
 
-        self.assertFalse(sim.model.conv1.output_quantizer.encoding)
-        self.assertFalse(sim.model.conv1.input_quantizer.encoding)
+        for quantizer in sim.model.conv1.input_quantizers + sim.model.conv1.output_quantizers:
+            self.assertFalse(quantizer.encoding)
         self.assertTrue(sim.model.conv1.param_quantizers['weight'])
 
         dataset_size = 100
@@ -81,9 +80,12 @@ class TestAdaroundActivationSampler(unittest.TestCase):
         image_size = (3, 32, 32)
         data_loader = create_fake_data_loader(dataset_size, batch_size, image_size)
         possible_batches = dataset_size // batch_size
-        iterator = iter(data_loader)
-        quant_inp, orig_out = ActivationSampler.sample_activation(model.conv1, sim.model.conv1, model, sim.model,
-                                                                  iterator, num_batches=possible_batches)
+        def forward_fn(model, inputs):
+            inputs, _ = inputs
+            model(inputs)
+
+        act_sampler = ActivationSampler(model.conv1, sim.model.conv1, model, sim.model, forward_fn)
+        quant_inp, orig_out = act_sampler.sample_and_place_all_acts_on_cpu(data_loader)
 
         self.assertEqual(list(quant_inp.shape), [batch_size * possible_batches, 3, 32, 32])
         self.assertEqual(list(orig_out.shape), [batch_size * possible_batches, 32, 18, 18])
@@ -91,19 +93,18 @@ class TestAdaroundActivationSampler(unittest.TestCase):
     def test_activation_sampler_fully_connected_module(self):
         """ Test ActivationSampler for a fully connected module """
         AimetLogger.set_level_for_all_areas(logging.DEBUG)
-
         model = TinyModel().eval()
-
         sim = QuantizationSimModel(model, dummy_input=torch.randn(1, 3, 32, 32), quant_scheme='tf_enhanced',
                                    default_param_bw=4)
 
         for module in sim.model.modules():
             if isinstance(module, QcQuantizeWrapper):
-                module.output_quantizer.enabled = False
-                module.input_quantizer.enabled = False
+                for quantizer in module.input_quantizers + module.output_quantizers:
+                    quantizer.enabled = False
+                    quantizer.enabled = False
 
-        self.assertFalse(sim.model.conv1.output_quantizer.encoding)
-        self.assertFalse(sim.model.conv1.input_quantizer.encoding)
+        for quantizer in sim.model.conv1.input_quantizers + sim.model.conv1.output_quantizers:
+            self.assertFalse(quantizer.encoding)
         self.assertTrue(sim.model.fc.param_quantizers['weight'])
 
         dataset_size = 100
@@ -111,11 +112,12 @@ class TestAdaroundActivationSampler(unittest.TestCase):
         image_size = (3, 32, 32)
         possible_batches = dataset_size // batch_size
         data_loader = create_fake_data_loader(dataset_size, batch_size, image_size)
+        def forward_fn(model, inputs):
+            inputs, _ = inputs
+            model(inputs)
 
-        iterator = iter(data_loader)
-
-        quant_inp, orig_out = ActivationSampler.sample_activation(model.fc, sim.model.fc, model, sim.model,
-                                                                  iterator, num_batches=possible_batches)
+        act_sampler = ActivationSampler(model.fc, sim.model.fc, model, sim.model, forward_fn)
+        quant_inp, orig_out = act_sampler.sample_and_place_all_acts_on_cpu(data_loader)
 
         self.assertEqual(list(quant_inp.shape), [batch_size * possible_batches, 36])
         self.assertEqual(list(orig_out.shape), [batch_size * possible_batches, 12])

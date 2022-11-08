@@ -123,16 +123,16 @@ class TestQcQuantizeOpStaticGrid:
         quantize.train()
         quantize._module_to_wrap.register_backward_hook(hook_fn)
 
-        quantize.input_quantizer.enabled = True
+        quantize.input_quantizers[0].enabled = True
         quantize.output_quantizers[0].enabled = True
-        quantize.input_quantizer.encoding = encodings
+        quantize.input_quantizers[0].encoding = encodings
         quantize.output_quantizers[0].encoding = encodings
 
         new_input = torch.autograd.Variable(torch.tensor([[[[0.6469]]], [[[-0.9]]]]), requires_grad=True)
         quantize.set_mode(QcQuantizeOpMode.ACTIVE)
         out = quantize(new_input)
 
-        quantize.input_quantizer.encoding = encodings_new
+        quantize.input_quantizers[0].encoding = encodings_new
         quantize.output_quantizers[0].encoding = encodings_new
         quantize.param_quantizers['weight'].encoding = encodings_new
 
@@ -498,13 +498,40 @@ class TestQcQuantizeOpLearnedGrid:
                                                       enabled_by_default=True,
                                                       data_type=QuantizationDataType.int)
 
-        encoding_min = torch.nn.Parameter(torch.FloatTensor([-5]))
-        encoding_max = torch.nn.Parameter(torch.FloatTensor([5]))
-        tensor = torch.FloatTensor(2, 1, 3, 5).uniform_(-10, 10)
-        tensor = tensor_quantizer.quantize_dequantize(tensor, encoding_min, encoding_max)
+        def test_with_options(use_unsigned_symmetric, encoding_min):
+            tensor_quantizer.use_unsigned_symmetric = use_unsigned_symmetric
 
-        assert np.amax(tensor.detach().numpy(), axis=(0, 1, 2, 3)) <= 5.0197
-        assert np.amin(tensor.detach().numpy(), axis=(0, 1, 2, 3)) >= -4.9804
+            encoding_min = torch.nn.Parameter(torch.FloatTensor([encoding_min]))
+            encoding_max = torch.nn.Parameter(torch.FloatTensor([5]))
+            # will fall into signed symmetric because encoding_min < 0
+            tensor = torch.FloatTensor(2, 1, 3, 5).uniform_(-10, 10)
+            tensor = tensor_quantizer.quantize_dequantize(tensor, encoding_min, encoding_max)
+
+            if encoding_min < 0:
+                # sigend symmetric case
+                min_val = -(torch.max(torch.abs(encoding_min), torch.abs(encoding_max))[0]).item()
+                grid_length = (5 - min_val) / (2**8 - 2)
+            else:
+                # unsigned symmetric case
+                min_val = 0
+                grid_length = (5 - encoding_min.item()) / (2**8 - 1)
+
+            assert np.amax(tensor.detach().numpy(), axis=(0, 1, 2, 3)) <= 5 + grid_length
+            assert np.amin(tensor.detach().numpy(), axis=(0, 1, 2, 3)) >= min_val - grid_length
+
+        # this case will fall into signed symmetric since encoding_min < 0
+        test_with_options(use_unsigned_symmetric=True, encoding_min=-5)
+
+        # unsigned symmetirc case test
+        test_with_options(use_unsigned_symmetric=True, encoding_min=0)
+
+        # signed symmetric test
+        test_with_options(use_unsigned_symmetric=False, encoding_min=-5)
+
+        # signed symmetric test
+        test_with_options(use_unsigned_symmetric=False, encoding_min=-1)
+
+
 
     @staticmethod
     def perform_auto_grad_computation(custom_input, min_value, max_value, n=0., p=255.):
@@ -540,7 +567,7 @@ class TestQcQuantizeOpLearnedGrid:
                                             quant_scheme=QuantScheme.training_range_learning_with_tf_init, device='cpu')
 
         inputs = torch.tensor([[True, True, False, False]])
-        quant_out = quantizer._quantize_activation(inputs, quantizer.output_quantizers, 'output')
+        quant_out = quantizer._quantize_activation(inputs, quantizer.output_quantizers, 'output')[0]
         expected_output = torch.tensor([True, True, False, False])
         assert torch.equal(quant_out, expected_output)
 
@@ -586,7 +613,7 @@ class TestQcQuantizeOpLearnedGrid:
         # using our "optimized custom" autograd operation.
         tensor_quantizer = LearnedGridTensorQuantizer(bitwidth=8, round_mode="nearest",
                                                       quant_scheme=QuantScheme.training_range_learning_with_tf_init,
-                                                      use_symmetric_encodings=True,
+                                                      use_symmetric_encodings=False,
                                                       enabled_by_default=True,
                                                       data_type=QuantizationDataType.int)
         y_pred = optimized_custom_op(oc_input_tensor, oc_enc_min, oc_enc_max, tensor_quantizer)
@@ -607,7 +634,7 @@ class TestQcQuantizeOpLearnedGrid:
         device = torch.device("cpu")
 
         # check if it covers all the conditions
-        _min = 0.1
+        _min = -0.5
         _max = 0.9
         data_size = (100, 100)
 
@@ -633,15 +660,15 @@ class TestQcQuantizeOpLearnedGrid:
 
         # validate gradients computed from custom gradients and autograd engine
         assert torch.allclose(c_input_grad.data[0], a_input_grad.data[0])
-        assert torch.isclose(c_min_grad.data[0], a_min_grad.data[0])
-        assert torch.isclose(c_max_grad.data[0], a_max_grad.data[0])
+        assert torch.isclose(c_min_grad.data[0], a_min_grad.data[0], atol=1e-3)
+        assert torch.isclose(c_max_grad.data[0], a_max_grad.data[0], atol=1e-3)
 
         # validate gradients computed from autograd engine and optimized custom gradients
         # NOTE: Optimized custom grad follows same computation logic of autograd engine
         # To sanity check, it should be compared whole tensor between two results
         assert torch.allclose(a_input_grad, oc_input_grad)
-        assert torch.isclose(a_min_grad, oc_min_grad.data)
-        assert torch.isclose(a_max_grad, oc_max_grad.data)
+        assert torch.isclose(a_min_grad, oc_min_grad.data, atol=1e-3)
+        assert torch.isclose(a_max_grad, oc_max_grad.data, atol=1e-3)
 
     def test_custom_gradient_for_range_learning_time_taken(self):
         """
@@ -790,9 +817,9 @@ class TestQcQuantizeOpLearnedGrid:
         quantize.train()
         quantize._module_to_wrap.register_backward_hook(hook_fn)
 
-        quantize.input_quantizer.enabled = True
+        quantize.input_quantizers[0].enabled = True
         quantize.output_quantizers[0].enabled = True
-        quantize.input_quantizer.encoding = encodings
+        quantize.input_quantizers[0].encoding = encodings
         quantize.output_quantizers[0].encoding = encodings
         quantize.param_quantizers['weight'].encoding = encodings
         quantize.param_quantizers['bias'].enabled = False
@@ -800,7 +827,7 @@ class TestQcQuantizeOpLearnedGrid:
         new_input = torch.autograd.Variable(torch.tensor([[[[-0.8469]]], [[[0.9]]]]), requires_grad=True)
         out = quantize(new_input)
 
-        quantize.input_quantizer.encoding = encodings_new
+        quantize.input_quantizers[0].encoding = encodings_new
         quantize.output_quantizers[0].encoding = encodings_new
         quantize.param_quantizers['weight'].encoding = encodings_new
 
@@ -935,35 +962,35 @@ class TestQcQuantizeOpLearnedGrid:
         enc.bw, enc.max, enc.min, enc.delta, enc.offset = 8, 0.5, -1, 0.01, 50
 
         # Set encoding for all - input, output and parameters quantizer.
-        quant_wrapper.input_quantizer.enabled = True
-        quant_wrapper.input_quantizer.encoding = enc
+        quant_wrapper.input_quantizers[0].enabled = True
+        quant_wrapper.input_quantizers[0].encoding = enc
         quant_wrapper.param_quantizers['weight'].enabled = True
         quant_wrapper.param_quantizers['weight'].encoding = enc
         quant_wrapper.param_quantizers['bias'].enabled = True
         quant_wrapper.param_quantizers['bias'].encoding = enc
-        quant_wrapper.output_quantizer.enabled = True
-        quant_wrapper.output_quantizer.encoding = enc
+        quant_wrapper.output_quantizers[0].enabled = True
+        quant_wrapper.output_quantizers[0].encoding = enc
 
-        enc_cur = quant_wrapper.output_quantizer.encoding
+        enc_cur = quant_wrapper.output_quantizers[0].encoding
         assert enc_cur.min == enc.min
 
         # Freeze encoding only for output quantizer.
-        quant_wrapper.output_quantizer.freeze_encoding()
+        quant_wrapper.output_quantizers[0].freeze_encoding()
 
         # Serialize and De-serialize.
         pickled = pickle.dumps(quant_wrapper)
         loaded_quant_wrapper = pickle.loads(pickled)
 
         # verify that the state _is_encoding_frozen state is maintained.
-        assert loaded_quant_wrapper.output_quantizer._is_encoding_frozen == True
-        assert loaded_quant_wrapper.input_quantizer._is_encoding_frozen == False
+        assert loaded_quant_wrapper.output_quantizers[0]._is_encoding_frozen == True
+        assert loaded_quant_wrapper.input_quantizers[0]._is_encoding_frozen == False
         assert loaded_quant_wrapper.param_quantizers['weight']._is_encoding_frozen == False
         assert loaded_quant_wrapper.param_quantizers['bias']._is_encoding_frozen == False
 
         assert loaded_quant_wrapper.param_quantizers['weight'].encoding.max == 0.5
         assert loaded_quant_wrapper.param_quantizers['bias'].encoding.max == 0.5
-        assert loaded_quant_wrapper.output_quantizer.encoding.max == 0.5
-        assert loaded_quant_wrapper.input_quantizer.encoding.max == 0.5
+        assert loaded_quant_wrapper.output_quantizers[0].encoding.max == 0.5
+        assert loaded_quant_wrapper.input_quantizers[0].encoding.max == 0.5
 
         enc_new = libpymo.TfEncoding()
         enc_new.bw, enc_new.max, enc_new.min, enc_new.delta, enc_new.offset = 8, 0.4, -0.98, 1, 0.2
@@ -971,9 +998,9 @@ class TestQcQuantizeOpLearnedGrid:
         # try to set new encoding except output quantizer.
         loaded_quant_wrapper.param_quantizers['weight'].encoding = enc_new
         loaded_quant_wrapper.param_quantizers['bias'].encoding = enc_new
-        loaded_quant_wrapper.input_quantizer.encoding = enc_new
+        loaded_quant_wrapper.input_quantizers[0].encoding = enc_new
         with pytest.raises(RuntimeError):
-            loaded_quant_wrapper.output_quantizer.encoding = enc_new
+            loaded_quant_wrapper.output_quantizers[0].encoding = enc_new
 
     def test_learned_grid_wrapper_pickle_upickle(self):
         """
@@ -989,28 +1016,28 @@ class TestQcQuantizeOpLearnedGrid:
         enc_old.bw, enc_old.max, enc_old.min, enc_old.delta, enc_old.offset = 8, 0.5, -1, 1, 0.2
 
         # Set encoding for all - input, output and parameters quantizer.
-        quant_wrapper.input_quantizer.enabled = True
-        quant_wrapper.input_quantizer.encoding = enc_old
+        quant_wrapper.input_quantizers[0].enabled = True
+        quant_wrapper.input_quantizers[0].encoding = enc_old
         quant_wrapper.param_quantizers['weight'].enabled = True
         quant_wrapper.param_quantizers['weight'].encoding = enc_old
         quant_wrapper.param_quantizers['bias'].enabled = True
         quant_wrapper.param_quantizers['bias'].encoding = enc_old
-        quant_wrapper.output_quantizer.enabled = True
-        quant_wrapper.output_quantizer.encoding = enc_old
+        quant_wrapper.output_quantizers[0].enabled = True
+        quant_wrapper.output_quantizers[0].encoding = enc_old
 
-        enc_cur = quant_wrapper.output_quantizer.encoding
+        enc_cur = quant_wrapper.output_quantizers[0].encoding
         assert enc_cur.min == enc_old.min
 
         # Freeze encoding only for output quantizer.
-        quant_wrapper.output_quantizer.freeze_encoding()
+        quant_wrapper.output_quantizers[0].freeze_encoding()
 
         # Serialize and De-serialize.
         pickled = pickle.dumps(quant_wrapper)
         loaded_quant_wrapper = pickle.loads(pickled)
 
         # verify that the state _is_encoding_frozen state is maintained.
-        assert loaded_quant_wrapper.output_quantizer._is_encoding_frozen == True
-        assert loaded_quant_wrapper.input_quantizer._is_encoding_frozen == False
+        assert loaded_quant_wrapper.output_quantizers[0]._is_encoding_frozen == True
+        assert loaded_quant_wrapper.input_quantizers[0]._is_encoding_frozen == False
         assert loaded_quant_wrapper.param_quantizers['weight']._is_encoding_frozen == False
         assert loaded_quant_wrapper.param_quantizers['bias']._is_encoding_frozen == False
 
@@ -1020,6 +1047,6 @@ class TestQcQuantizeOpLearnedGrid:
         # try to set new encoding except output quantizer.
         loaded_quant_wrapper.param_quantizers['weight'].encoding = enc_new
         loaded_quant_wrapper.param_quantizers['bias'].encoding = enc_new
-        loaded_quant_wrapper.input_quantizer.encoding = enc_new
+        loaded_quant_wrapper.input_quantizers[0].encoding = enc_new
         with pytest.raises(RuntimeError):
-            loaded_quant_wrapper.output_quantizer.encoding = enc_new
+            loaded_quant_wrapper.output_quantizers[0].encoding = enc_new

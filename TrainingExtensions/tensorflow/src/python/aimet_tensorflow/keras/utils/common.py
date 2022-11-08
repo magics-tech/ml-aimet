@@ -37,15 +37,23 @@
 # =============================================================================
 
 """ Common Utilities for tf 2 keras """
-
+import errno
+import os
 import typing
-
 import tensorflow as tf
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_from_session_graph
+from tensorflow.python.framework.graph_util_impl import remove_training_nodes
+
 from aimet_common.utils import AimetLogger
+from aimet_tensorflow.defs import AxisHandling
 
 _logger = AimetLogger.get_area_logger(AimetLogger.LogAreas.Quant)
 
 lambda_operators = ['__operators__.add', 'math.multiply', 'math.truediv', 'math.subtract']
+per_channel_quantizeable_layers = (tf.keras.layers.Conv2D, tf.keras.layers.Conv2DTranspose,
+                                   tf.keras.layers.DepthwiseConv2D, tf.keras.layers.SeparableConv2D)
+
+
 
 def is_lambda_operator(layer: tf.keras.layers.Layer) -> bool:
     """
@@ -57,6 +65,7 @@ def is_lambda_operator(layer: tf.keras.layers.Layer) -> bool:
     if 'function' in config:
         return config['function'] in lambda_operators
     return False
+
 
 def module_to_name_map(cur_layer: (tf.keras.Model, tf.keras.layers.Layer)) \
         -> typing.Dict[tf.keras.layers.Layer, typing.Tuple[tf.keras.Model, str]]:
@@ -227,6 +236,7 @@ def create_node_to_layer_map(cur_layer: (tf.keras.Model, tf.keras.layers.Layer))
 
     return node_layer_map
 
+
 def replace_layer_in_functional_model(model: tf.keras.Model, old_layer: tf.keras.layers.Layer,
                                       new_layers: typing.Union[typing.List, tf.keras.layers.Layer]):
     """
@@ -273,6 +283,7 @@ def replace_layer_in_functional_model(model: tf.keras.Model, old_layer: tf.keras
     # Update model's layers and network nodes
     residing_model._insert_layers(new_layers + list(following_layers_and_inputs_dict.keys()))
 
+
 def _get_residing_model_of_layer(model: tf.keras.Model, layer: tf.keras.layers.Layer) -> typing.Union[tf.keras.Model,
                                                                                                       None]:
     """
@@ -292,6 +303,7 @@ def _get_residing_model_of_layer(model: tf.keras.Model, layer: tf.keras.layers.L
             if residing_model is not None:
                 return residing_model
     return None
+
 
 def _get_following_layers_and_inputs(model: tf.keras.Model, layer: tf.keras.layers.Layer) -> \
         typing.Dict[tf.keras.layers.Layer, typing.List]:
@@ -314,6 +326,7 @@ def _get_following_layers_and_inputs(model: tf.keras.Model, layer: tf.keras.laye
         assert layer in model._output_layers
     return following_layers_and_inputs
 
+
 def _remove_network_nodes(model: tf.keras.Model, layers: typing.List[tf.keras.layers.Layer]):
     """
     Remove network nodes in the model corresponding to the given layers
@@ -324,6 +337,7 @@ def _remove_network_nodes(model: tf.keras.Model, layers: typing.List[tf.keras.la
     for layer in layers:
         node_key = layer.name + '_ib-0'
         model._network_nodes.remove(node_key)
+
 
 def _call_new_layers_sequentially(parent_layers: typing.List[tf.keras.layers.Layer],
                                   new_layers: typing.List[tf.keras.layers.Layer]) -> tf.Tensor:
@@ -347,6 +361,7 @@ def _call_new_layers_sequentially(parent_layers: typing.List[tf.keras.layers.Lay
     for layer in new_layers:
         curr_tensor = layer(curr_tensor)
     return curr_tensor
+
 
 def _clear_inbound_and_outbound_nodes(layer_of_interest: tf.keras.layers.Layer,
                                       parent_layers: typing.List[tf.keras.layers.Layer],
@@ -388,6 +403,7 @@ def _clear_inbound_and_outbound_nodes(layer_of_interest: tf.keras.layers.Layer,
 
         layer_of_interest._outbound_nodes = []
 
+
 def _link_following_layers_to_new_layer_output(new_tensor_output: tf.Tensor,
                                                following_layers_and_inputs_dict: typing.Dict[tf.keras.layers.Layer,
                                                                                              typing.List[tf.Tensor]],
@@ -407,6 +423,7 @@ def _link_following_layers_to_new_layer_output(new_tensor_output: tf.Tensor,
         if isinstance(keras_inputs, list):
             keras_inputs = keras_inputs[0]
         _ = following_layer(keras_inputs)
+
 
 def _update_model_output_info(residing_model: tf.keras.Model, replaced_layer: tf.keras.layers.Layer,
                               new_tensor_output: tf.Tensor):
@@ -462,3 +479,101 @@ def parse_activation_layer(
         return ["Unknown"]
 
     return [onnx_activation]
+
+
+def get_number_of_outputs_and_axis_handling(layer, weight_shape, param_type) -> typing.Tuple[int, AxisHandling]:
+    """
+    Get number of output of channels and handling axis for a specific layers
+    :param layer: tf.keras.layers.Layer
+    :param weight_shape:
+    :param param_type: str
+    :return: Tuple[int, int]
+    """
+    axis_handling = AxisHandling.LAST_AXIS
+    num_output_channels = weight_shape[-1]
+
+    if isinstance(layer, (tf.keras.layers.Conv1DTranspose,
+                          tf.keras.layers.Conv2DTranspose,
+                          tf.keras.layers.Conv3DTranspose)) and param_type != 'bias':
+        num_output_channels = weight_shape[-2]
+
+    elif isinstance(layer, (tf.keras.layers.DepthwiseConv2D,
+                            tf.keras.layers.SeparableConv2D)) and param_type != 'bias':
+        num_output_channels *= weight_shape[-2]
+        axis_handling = AxisHandling.LAST_TWO_AXES
+
+    return num_output_channels, axis_handling
+
+
+def log_param_quantizer_wrapper_details(layer, axis_handling=None, num_output_channels=None):
+    """ Logging statements to which Keras Layers are wrapped in Param Quantizers """
+    if axis_handling is None and num_output_channels is None:
+        _logger.debug("%s to be wrapped in ParamPerTENSORQuantizer\n", layer)
+    else:
+        _logger.debug("%s to be wrapped in ParamPerCHANNELQuantizer\n"
+                      "Axis: %d\n"
+                      "Number of Output Channels: %d", layer,
+                      axis_handling, num_output_channels)
+
+
+def convert_h5_model_to_pb_model(h5_model_path: str, custom_objects: dict = None):
+    """
+    This utility function converts a h5_model from Keras into a frozen pb for consumption by SNPE/QNN
+    :param h5_model_path: Path to the saved h5 Keras Model
+    :param custom_objects: If there are custom objects to load, Keras needs a dict of them to map them
+    """
+
+    # Function for validating if the file exist and is a h5
+    def validate_model_path() -> typing.Tuple[str, str]:
+        if not os.path.exists(h5_model_path):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), h5_model_path)
+
+        model_name_split = os.path.basename(h5_model_path).split('.')
+        if model_name_split[1] != 'h5':
+            raise ValueError("File must be a h5 model.")
+
+        model_name = model_name_split[0] + '_converted.pb'
+        save_path = os.path.dirname(h5_model_path)
+
+        return model_name, save_path if save_path else os.getcwd()
+
+    def freeze_session(session, output_names):
+        graph = session.graph
+        with graph.as_default():
+            output_names += [v.op.name for v in tf.compat.v1.global_variables()]
+            input_graph_def = graph.as_graph_def()
+
+            # Unset all nodes device
+            for node in input_graph_def.node:
+                node.device = ""
+
+            # Take session and output names to a frozen graph. Also converting training specific ops
+            # to testing ops i.e. Identities
+            frozen_graph = convert_variables_to_constants_from_session_graph(
+                session, input_graph_def, output_names)
+            frozen_graph = remove_training_nodes(frozen_graph)
+        return frozen_graph
+
+    model_name, save_path = validate_model_path()
+    with tf.compat.v1.Graph().as_default():
+        with tf.compat.v1.Session() as sess:
+            # Grab the session and set the learning phase to test to remove training nodes
+            tf.compat.v1.keras.backend.get_session(sess)
+            tf.compat.v1.keras.backend.set_learning_phase(0)
+
+            # Try and load model. If there are custom objects, then user is logged how to pass custom objects and
+            # raises again with the stacktrace.
+            try:
+                model = tf.keras.models.load_model(h5_model_path,
+                                                   custom_objects=custom_objects,
+                                                   compile=False)
+            except ValueError:
+                _logger.error("If using custom layers, pass a dict mapping them. "
+                              "For example, {'CustomLayer': CustomLayer}")
+                raise
+
+            frozen_graph = freeze_session(tf.compat.v1.keras.backend.get_session(),
+                                          [out.op.name for out in model.outputs])
+            tf.io.write_graph(frozen_graph, save_path, model_name, as_text=False)
+
+            _logger.info("Success. The converted model is located at %s saved as %s", save_path, model_name)

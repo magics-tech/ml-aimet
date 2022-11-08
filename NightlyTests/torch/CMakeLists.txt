@@ -35,7 +35,6 @@
 #  @@-COPYRIGHT-END-@@
 #
 #=============================================================================
-cmake_minimum_required(VERSION 3.5)
 
 if (ENABLE_CUDA)
     set(CUDA_FLAG -m "not blah")
@@ -47,9 +46,8 @@ endif (ENABLE_CUDA)
 
 add_custom_target(AcceptanceTests.TorchDependencies
       COMMAND ${CMAKE_COMMAND} -E env
-      "${AIMET_LD_LIBRARY_PATH}"
       "${AIMET_PYTHONPATH}"
-      python3 ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.py ${CMAKE_CURRENT_SOURCE_DIR}/resnet18_eval_scores.csv
+      "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.py ${CMAKE_CURRENT_SOURCE_DIR}/resnet18_eval_scores.csv
        ${USE_CUDA})
 
 add_custom_target( AcceptanceTests.Torch )
@@ -59,9 +57,8 @@ file(GLOB files "${CMAKE_CURRENT_SOURCE_DIR}/test_*.py")
         get_filename_component( testname "${filename}" NAME_WE )
         add_custom_target(AcceptanceTests.Torch.${testname}
             VERBATIM COMMAND ${CMAKE_COMMAND} -E env
-             "${AIMET_LD_LIBRARY_PATH}"
              "${AIMET_PYTHONPATH}"
-             pytest -s ${filename} ${CUDA_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output_${testname}.xml)
+             ${Python3_EXECUTABLE} -m pytest -s ${filename} ${CUDA_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output_${testname}.xml)
 
         add_dependencies(  AcceptanceTests.Torch.${testname} AcceptanceTests.TorchDependencies )
         add_dependencies( AcceptanceTests.Torch AcceptanceTests.Torch.${testname} )

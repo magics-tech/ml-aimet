@@ -33,7 +33,6 @@
 #
 #  @@-COPYRIGHT-END-@@
 #==============================================================================
-cmake_minimum_required(VERSION 3.5)
 
 if (ENABLE_CUDA)
     set(CUDA_FLAG "not blah")
@@ -50,11 +49,9 @@ endif ()
 string(APPEND MARKER_FLAG ${CUDA_FLAG} " and " ${TF_VERSION_FLAG})
 
 add_test(TfNonEagerTrainingExtensionPythonTest
-        pytest ${CMAKE_CURRENT_SOURCE_DIR}/python/non_eager -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_non_eager_output.xml
+        ${Python3_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR}/python/non_eager -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_non_eager_output.xml
         )
 
-set_property(TEST TfNonEagerTrainingExtensionPythonTest
-      APPEND PROPERTY ENVIRONMENT "${AIMET_LD_LIBRARY_PATH}")
 set_property(TEST TfNonEagerTrainingExtensionPythonTest
       APPEND PROPERTY ENVIRONMENT "${AIMET_PYTHONPATH}")
 
@@ -65,11 +62,9 @@ endif(DEFINED ENV{DEPENDENCY_DATA_PATH})
 
 if (NOT TF_VERSION MATCHES "^1.15")
     add_test(TfEagerTrainingExtensionTest
-            pytest ${CMAKE_CURRENT_SOURCE_DIR}/python/eager -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_eager_output.xml
+            ${Python3_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR}/python/eager -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_eager_output.xml
             )
 
-    set_property(TEST TfEagerTrainingExtensionTest
-          APPEND PROPERTY ENVIRONMENT "${AIMET_LD_LIBRARY_PATH}")
     set_property(TEST TfEagerTrainingExtensionTest
           APPEND PROPERTY ENVIRONMENT "${AIMET_PYTHONPATH}")
 
@@ -80,18 +75,11 @@ if (NOT TF_VERSION MATCHES "^1.15")
 
 endif ()
 
-find_package(GTest)
-
-include_directories(BEFORE
-        ${gtest_SOURCE_DIR}/include
-        ${gtest_SOURCE_DIR}
-        )
-
 add_executable(TfTrainingExtensionCppTest
     TestTfTensorOps.cpp)
 
 target_link_libraries(TfTrainingExtensionCppTest
-        gtest gtest_main
+        gtest_main
         TensorFlow
         TrainingExtensionsTf
         )

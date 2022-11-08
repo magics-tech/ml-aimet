@@ -35,8 +35,14 @@
 #
 #  @@-COPYRIGHT-END-@@
 # =============================================================================
+""" Utility functions for ONNX """
+from typing import Dict, List
+
 import onnx
-from typing import Dict
+from onnx import onnx_pb
+
+
+OP_TYPES_WITH_PARAMS = ['Conv', 'Gemm', 'ConvTranspose', 'BatchNormalization']
 
 
 def remove_nodes_with_type(node_type: str, onnx_graph: onnx.onnx_pb.GraphProto):
@@ -78,16 +84,15 @@ def replace_node_with_op(node_type: str, new_type: str, onnx_graph: onnx.onnx_pb
 def get_weights(name: str, onnx_graph: onnx.onnx_pb.GraphProto) -> bytes:
     """
     Return the weights by given name
-
     :param name, name of the weights to find
     :param onnx_graph, onnx graph to find the corresponding weight data
     :return onnx tensor
-
     """
     for param in onnx_graph.initializer:
         if param.name == name:
             return param.raw_data
     assert Exception("Couldn't find weights by the given name")
+    return None
 
 
 def get_ordered_dict_of_nodes(onnx_graph: onnx.onnx_pb.GraphProto) -> Dict:
@@ -102,3 +107,57 @@ def get_ordered_dict_of_nodes(onnx_graph: onnx.onnx_pb.GraphProto) -> Dict:
     for node in onnx_graph.node:
         ordered_dict[node.name] = node
     return ordered_dict
+
+
+class ParamUtils:
+    """ Param utilities """
+    @staticmethod
+    def get_shape(model: onnx_pb.ModelProto, node: onnx_pb.NodeProto, param_index: int) -> List:
+        """
+        Returns a list of shape for the param specifies
+        :param model: ONNX model
+        :param node: ONNX node to which the param feeds to
+        :param param_index: Index at which param feeds to the ONNX node
+        """
+        if node.op_type in OP_TYPES_WITH_PARAMS:
+            if len(node.input) >= param_index + 1:
+                param_name = node.input[param_index]
+                for param in model.graph.initializer:
+                    if param.name == param_name:
+                        return param.dims
+            assert "Param not present in the node"
+        else:
+            assert "Node type not in allowed op types with param list"
+        return None
+
+    @staticmethod
+    def get_param(model: onnx_pb.ModelProto, node: onnx_pb.NodeProto, param_index: int) -> onnx_pb.TensorProto:
+        """
+        Returns the param tensor
+        :param model: ONNX model
+        :param node: ONNX node to which the param feeds to
+        :param param_index: Index at which param feeds to the ONNX node
+        """
+        if node.op_type in OP_TYPES_WITH_PARAMS:
+            if len(node.input) >= param_index + 1:
+                param_name = node.input[param_index]
+                for param in model.graph.initializer:
+                    if param.name == param_name:
+                        return param
+            assert "Param not present in the node"
+        else:
+            assert "Node type not in allowed op types with param list"
+        return None
+
+
+def get_product_name_from_quantized_name(quantized_name: str):
+    """
+    Gets product's name from quantized name
+    :param quantized_name: Quantized name
+    """
+    if '_updated' in quantized_name:
+        return quantized_name[:quantized_name.index('_updated')]
+    if '_qdq' in quantized_name:
+        return quantized_name[:quantized_name.index('_qdq')]
+    # If there is no quantizer added then return None
+    return None

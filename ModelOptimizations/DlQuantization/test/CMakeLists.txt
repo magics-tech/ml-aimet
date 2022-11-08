@@ -33,14 +33,9 @@
 #
 #  @@-COPYRIGHT-END-@@
 #==============================================================================
-cmake_minimum_required(VERSION 3.5)
-
-find_package(GTest)
 
 include_directories(BEFORE
       ${CMAKE_CURRENT_SOURCE_DIR}/../src
-      ${gtest_SOURCE_DIR}/include
-      ${gtest_SOURCE_DIR}
 )
 
 add_executable(MoDlQuantizationTest
@@ -68,13 +63,13 @@ if (ENABLE_CUDA)
             MoDlQuantization
             MoDlQuantizationCuda
             CUDA::cublas
-            gtest gtest_main
+            gtest_main
             )
 
 else (ENABLE_CUDA)
     target_link_libraries(MoDlQuantizationTest
             MoDlQuantization
-            gtest gtest_main
+            gtest_main
             )
 
 endif (ENABLE_CUDA)
@@ -84,11 +79,9 @@ add_test(MoDlQuantizationTest
       MoDlQuantizationTest --gtest_output=xml:cpp_test_output.xml)
 
 add_test(MoDlQuantizationPythonTest
-      pytest ${CMAKE_CURRENT_SOURCE_DIR} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output.xml
+      ${Python3_EXECUTABLE} -m pytest ${CMAKE_CURRENT_SOURCE_DIR} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output.xml
       )
 
-set_property(TEST MoDlQuantizationPythonTest
-      APPEND PROPERTY ENVIRONMENT "${AIMET_LD_LIBRARY_PATH}")
 set_property(TEST MoDlQuantizationPythonTest
       APPEND PROPERTY ENVIRONMENT "${AIMET_PYTHONPATH}")
 

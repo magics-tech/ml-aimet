@@ -33,7 +33,6 @@
 #  
 #  @@-COPYRIGHT-END-@@
 #==============================================================================
-cmake_minimum_required(VERSION 3.5)
 
 add_library(MoDlEqualization STATIC
       src/BatchNormFoldForPython.cpp
@@ -57,13 +56,16 @@ add_library(MoDlEqualization STATIC
       include/DlEqualization/CrossLayerScalingForPython.h
       include/DlEqualization/BiasCorrection.h
       include/DlEqualization/BiasCorrectionForPython.h
-      test/TestDLEqualization.cpp
       test/python/test_cross_layer_scaling.py )
 
 target_include_directories(MoDlEqualization
       PUBLIC
       ${CMAKE_CURRENT_SOURCE_DIR}/include
-      ${PYBIND11_INC_DIRS})
+      )
+
+target_link_libraries(MoDlEqualization
+      PUBLIC PYBIND11
+      )
 
 target_compile_options(MoDlEqualization
         PRIVATE

@@ -36,6 +36,7 @@
 #  @@-COPYRIGHT-END-@@
 # =============================================================================
 """ utilities for fused batchnorm op """
+# pylint: disable=too-many-lines
 
 from typing import Union, List
 import numpy as np
@@ -101,7 +102,6 @@ class BNUtils:
                       tf.compat.v1.assign(bn_beta_tf_var, np.zeros(bn_beta_tf_var.shape, dtype=bn_beta_tf_var.dtype.as_numpy_dtype)),
                       tf.compat.v1.assign(bn_mean_tf_var, np.zeros(bn_mean_tf_var.shape, dtype=bn_mean_tf_var.dtype.as_numpy_dtype)),
                       tf.compat.v1.assign(bn_var_tf_var, np.ones(bn_var_tf_var.shape, dtype=bn_var_tf_var.dtype.as_numpy_dtype))])
-
 
     @staticmethod
     def skip_bn_op(sess: tf.compat.v1.Session, bn_op: tf.Operation, in_tensor: tf.Tensor, out_tensor: tf.Tensor):
@@ -211,7 +211,6 @@ class BNUtils:
 
         return beta_read_tensor
 
-
     @staticmethod
     def get_beta_read_var_op_tensor(graph: tf.Graph, bn_op: tf.Operation) -> tf.Tensor:
         """
@@ -246,6 +245,7 @@ class BNUtils:
 
         with sess.graph.as_default():
             numpy_data = sess.run(beta_tensor)
+
         return numpy_data
 
     @staticmethod
@@ -516,6 +516,7 @@ class BNUtils:
 
         with sess.graph.as_default():
             numpy_data = sess.run(moving_var_tensor)
+
         return numpy_data
 
     @staticmethod
@@ -698,6 +699,7 @@ class BNUtils:
 
         with sess.graph.as_default():
             numpy_data = sess.run(moving_mean_tensor)
+
         return numpy_data
 
     @staticmethod
@@ -735,9 +737,22 @@ class BNUtils:
         :param bn_op: Batchnorm op to search for corresponding assign_moving_avg op
         :return: assign_moving_op corresponding with the bn op, or None if it does not exist.
         """
-        assert bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm', 'Identity']
-        assert len(bn_op.outputs) == 6 or len(bn_op.outputs) == 5 or len(bn_op.outputs) == 1
-        if bn_op.outputs[1].consumers():
+        assert (bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm'] and len(bn_op.outputs) in [5, 6]) \
+               or (bn_op.type == 'Identity' and len(bn_op.outputs) == 1)
+
+        assign_moving_avg_op = None
+        if bn_op.type in 'Identity':
+            if_op = bn_op.inputs[0].op
+            assert if_op.type == 'If'
+            identity_1_op = if_op.outputs[1].consumers()[0]
+            assert identity_1_op.type == 'Identity'
+            sub_op = identity_1_op.outputs[0].consumers()[0]
+            assert sub_op.type == 'Sub'
+            mul_op = sub_op.outputs[0].consumers()[0]
+            assert mul_op.type == 'Mul'
+            assign_moving_avg_op = mul_op.outputs[0].consumers()[0]
+            assert assign_moving_avg_op.type in ['AssignSub', 'AssignSubVariableOp']
+        elif bn_op.outputs[1].consumers():
             child_op = bn_op.outputs[1].consumers()[0]
             if child_op.type == 'Merge':
                 sub_op = child_op.outputs[0].consumers()[0]
@@ -748,8 +763,7 @@ class BNUtils:
             assert mul_op.type == 'Mul'
             assign_moving_avg_op = mul_op.outputs[0].consumers()[0]
             assert assign_moving_avg_op.type in ['AssignSub', 'AssignSubVariableOp']
-            return assign_moving_avg_op
-        return None
+        return assign_moving_avg_op
 
     @staticmethod
     def get_assign_moving_avg_1_op(bn_op: tf.Operation) -> Union[tf.Operation, None]:
@@ -759,9 +773,22 @@ class BNUtils:
         :param bn_op: Batchnorm op to search for corresponding assign_moving_avg_1 op
         :return: assign_moving_avg_1 corresponding with the bn op, or None if it does not exist.
         """
-        assert bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm', 'Identity']
-        assert len(bn_op.outputs) == 6 or len(bn_op.outputs) == 5
-        if bn_op.outputs[2].consumers():
+        assert (bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm'] and len(bn_op.outputs) in [5, 6]) \
+               or (bn_op.type == 'Identity' and len(bn_op.outputs) == 1)
+
+        assign_moving_avg_op = None
+        if bn_op.type in 'Identity':
+            if_op = bn_op.inputs[0].op
+            assert if_op.type == 'If'
+            identity_2_op = if_op.outputs[2].consumers()[0]
+            assert identity_2_op.type == 'Identity'
+            sub_op = identity_2_op.outputs[0].consumers()[0]
+            assert sub_op.type == 'Sub'
+            mul_op = sub_op.outputs[0].consumers()[0]
+            assert mul_op.type == 'Mul'
+            assign_moving_avg_op = mul_op.outputs[0].consumers()[0]
+            assert assign_moving_avg_op.type in ['AssignSub', 'AssignSubVariableOp']
+        elif bn_op.outputs[2].consumers():
             child_op = bn_op.outputs[2].consumers()[0]
             if child_op.type == 'Merge':
                 sub_op = child_op.outputs[0].consumers()[0]
@@ -772,8 +799,7 @@ class BNUtils:
             assert mul_op.type == 'Mul'
             assign_moving_avg_op = mul_op.outputs[0].consumers()[0]
             assert assign_moving_avg_op.type in ['AssignSub', 'AssignSubVariableOp']
-            return assign_moving_avg_op
-        return None
+        return assign_moving_avg_op
 
     @staticmethod
     def remove_bn_op_from_update_ops(sess: tf.compat.v1.Session, bn_op: tf.Operation):
@@ -921,7 +947,28 @@ class BNUtils:
             return None
 
     @staticmethod
-    def get_momentum(bn_op: tf.Operation) -> float:
+    def _fused_bn_op_cond_momentum_struct_1(bn_op: tf.Operation) -> Union[float, None, tf.Variable]:
+        """
+        Return momentum value corresponding to fused batchnorm with training=Variable
+
+        :param bn_op: bn_op obtained from connected graph using get_modules a Identity op inside BN scope.
+        :return: momentum value
+        """
+        try:
+            cond_1_identity_op = BNUtils.get_cond_1_identity_op(bn_op)
+            cond_1_op = cond_1_identity_op.inputs[0].op
+            assert cond_1_op.type == 'If'
+            decay_op = cond_1_op.inputs[1].op
+            if decay_op.type == 'Const':
+                decay = decay_op.get_attr('value').float_val[0]
+            else:
+                decay = decay_op
+            return decay
+        except:     # pylint: disable=bare-except
+            return None
+
+    @staticmethod
+    def get_momentum(bn_op: tf.Operation) -> Union[float, tf.Variable]:
         """
         Returns momentum extracted from given bn op.  If bn op is training=False mode, momentum will be none.
 
@@ -933,22 +980,25 @@ class BNUtils:
                                               BNUtils._bn_op_momentum_struct_2]
         fused_bn_op_struct_for_momentum_handlers = [BNUtils._fused_bn_op_momentum_struct_1,
                                                     BNUtils._fused_bn_op_momentum_struct_2]
+        fused_bn_op_cond_struct_for_momentum_handlers = [BNUtils._fused_bn_op_cond_momentum_struct_1]
 
         decay = None
         if bn_op.type in ['Mul']:
             # try all handlers available
             for handler in bn_op_struct_for_momentum_handlers:
-                if decay is None:
-                    decay = handler(bn_op)
-                else:
+                decay = handler(bn_op)
+                if decay is not None:
                     break
-
         elif bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm']:
             # try all handlers available
             for handler in fused_bn_op_struct_for_momentum_handlers:
-                if decay is None:
-                    decay = handler(bn_op)
-                else:
+                decay = handler(bn_op)
+                if decay is not None:
+                    break
+        elif bn_op.type in ['Identity']:
+            for handler in fused_bn_op_cond_struct_for_momentum_handlers:
+                decay = handler(bn_op)
+                if decay is not None:
                     break
         else:
             logger.error("Error, unknown BN op")
@@ -956,19 +1006,23 @@ class BNUtils:
         return decay
 
     @staticmethod
-    def get_training(bn_op: tf.Operation) -> Union[None, bool, tf.Tensor]:
+    def get_training(bn_op: tf.Operation) -> Union[None, bool, tf.Tensor, tf.Variable]:
         """
         Returns either a boolean of whether the BN op training mode is True or False, or the is_training tensor
         feeding into the BN op if it is using a tensor to determine the mode dynamically.
         :param bn_op: bn_op obtained in the connected graph
         :return: True or False for training mode, or tf.Tensor that determines the mode dynamically.
         """
-        assert bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm', 'Mul']
-        if bn_op.type == 'FusedBatchNormV3' or bn_op.type == 'FusedBatchNorm':
+        assert bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm', 'Mul', 'Identity']
+
+        if bn_op.type in ['FusedBatchNormV3', 'FusedBatchNorm', 'Identity']:
             if 'FusedBatchNormV3_1' in bn_op.name:
                 switch_op = bn_op.inputs[0].op
                 pred_id_op = switch_op.inputs[1].op
                 training = pred_id_op.inputs[0]
+            elif bn_op.type == 'Identity':
+                cond_op = bn_op.inputs[0].op
+                training = cond_op.inputs[0]
             else:
                 training = bn_op.get_attr('is_training')
             return training
@@ -993,3 +1047,26 @@ class BNUtils:
             return pred_id_op.inputs[0]
         logger.error('Error, unknown BN structure')
         return None
+
+    @staticmethod
+    def get_cond_1_identity_op(bn_op: tf.Operation) -> tf.Operation:
+        """
+        Returns cond_1 Identity op of bn when training is variable
+
+        :param bn_op: bn_op obtained from connected graph using get_modules a Identity op inside BN scope.
+        :return: cond_1 Identity op
+        """
+        assert bn_op.type == 'Identity'
+
+        assign_moving_avg = BNUtils.get_assign_moving_avg_op(bn_op)
+        mul_op = assign_moving_avg.inputs[1].op
+        assert mul_op.type == 'Mul'
+        sub_op = mul_op.inputs[1].op
+        assert sub_op.type == 'Sub'
+        cond_1_identity_op = sub_op.inputs[1].op
+        assert cond_1_identity_op.type == 'Identity'
+
+        # Make sure fetched op isn't cond op
+        assert bn_op != cond_1_identity_op
+
+        return cond_1_identity_op

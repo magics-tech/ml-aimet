@@ -35,7 +35,6 @@
 #  @@-COPYRIGHT-END-@@
 #
 #=============================================================================
-cmake_minimum_required(VERSION 3.5)
 
 if (ENABLE_CUDA)
     set(CUDA_FLAG "not blah")
@@ -55,14 +54,12 @@ string(APPEND MARKER_FLAG ${CUDA_FLAG} " and " ${TF_VERSION_FLAG})
 
 add_custom_target(AcceptanceTests.TensorflowDependencies
         COMMAND ${CMAKE_COMMAND} -E env
-        "${AIMET_LD_LIBRARY_PATH}"
         "${AIMET_PYTHONPATH}"
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.py ${CMAKE_CURRENT_SOURCE_DIR}/resnet50_eval_scores.csv ${USE_CUDA})
+        "${Python3_EXECUTABLE}" ${CMAKE_CURRENT_SOURCE_DIR}/dependencies.py ${CMAKE_CURRENT_SOURCE_DIR}/resnet50_eval_scores.csv ${USE_CUDA})
 
 add_custom_target(AcceptanceTests.Tensorflow
       VERBATIM COMMAND ${CMAKE_COMMAND} -E env
-      "${AIMET_LD_LIBRARY_PATH}"
       "${AIMET_PYTHONPATH}"
-      pytest -s ${CMAKE_CURRENT_SOURCE_DIR} -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output.xml)
+      ${Python3_EXECUTABLE} -m pytest -s ${CMAKE_CURRENT_SOURCE_DIR} -m ${MARKER_FLAG} --junitxml=${CMAKE_CURRENT_BINARY_DIR}/py_test_output.xml)
 
 add_dependencies(AcceptanceTests.Tensorflow AcceptanceTests.TensorflowDependencies)

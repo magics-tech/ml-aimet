@@ -35,7 +35,7 @@
 #
 #  @@-COPYRIGHT-END-@@
 # =============================================================================
-
+import contextlib
 import os
 import logging
 
@@ -46,6 +46,8 @@ import aimet_torch.elementwise_ops
 from aimet_common.utils import AimetLogger
 from aimet_torch import onnx_utils
 import onnx
+
+from aimet_torch.examples.test_models import RoiModel, InputOutputDictModel
 
 
 class OutOfOrderModel(torch.nn.Module):
@@ -99,6 +101,14 @@ class HierarchicalMultiplyModule(torch.nn.Module):
         x = self.mul1(x)
         return self.mul2(x) * 6
 
+# helper method to restore prior state of the flag.
+@contextlib.contextmanager
+def onnx_simply(enable):
+    entry_state = onnx_utils.simplify_onnx_model
+    onnx_utils.simplify_onnx_model = enable
+    yield
+    onnx_utils.simplify_onnx_model = entry_state
+
 class TestOnnxUtils:
 
     @staticmethod
@@ -117,19 +127,25 @@ class TestOnnxUtils:
         model = models.resnet18(pretrained=False)
         dummy_input = torch.randn(1, 3, 224, 224)
 
-        torch.onnx.export(model, dummy_input, './data/' + model_name + '.onnx')
-        onnx_utils.OnnxSaver.set_node_names('./data/' + model_name + '.onnx', model, dummy_input, is_conditional=False,
-                                            module_marker_map={})
+        with onnx_simply(True):
+            onnx_utils.OnnxSaver.set_node_names('./data/' + model_name + '.onnx', model, dummy_input,
+                                                is_conditional=False, module_marker_map={})
 
         onnx_model = onnx.load('./data/' + model_name + '.onnx')
+        self.check_onnx_node_names(onnx_model)
+
+    def check_onnx_node_names(self, onnx_model):
+        name_to_bn_node_map = {}
         for node in onnx_model.graph.node:
             if node.op_type in ('Conv', 'Gemm', 'MaxPool'):
                 assert node.name
+            if node.op_type == 'BatchNormalization':
+                name_to_bn_node_map[node.name] = node
 
             for in_tensor in node.input:
                 if in_tensor.endswith('weight'):
-                    print("Checking " + in_tensor)
-                    assert node.name == in_tensor[:-7]
+                    tensor_context = in_tensor[:-7]
+                    assert node.name == tensor_context or tensor_context in name_to_bn_node_map
 
     def test_add_pytorch_node_names_to_onnx_ooo(self):
 
@@ -139,18 +155,12 @@ class TestOnnxUtils:
         model = OutOfOrderModel()
         dummy_input = torch.randn(1, 16, 20, 20)
 
-        onnx_utils.OnnxSaver.set_node_names('./data/' + model_name + '.onnx', model, dummy_input, is_conditional=False,
-                                            module_marker_map={})
+        with onnx_simply(True):
+            onnx_utils.OnnxSaver.set_node_names('./data/' + model_name + '.onnx', model, dummy_input,
+                                                is_conditional=False, module_marker_map={})
 
         onnx_model = onnx.load('./data/' + model_name + '.onnx')
-        for node in onnx_model.graph.node:
-            if node.op_type in ('Conv', 'Gemm', 'MaxPool'):
-                assert node.name
-
-            for in_tensor in node.input:
-                if in_tensor.endswith('weight'):
-                    print("Checking " + in_tensor)
-                    assert node.name == in_tensor[:-7]
+        self.check_onnx_node_names(onnx_model)
 
     def test_onnx_node_name_to_input_output_names_util(self):
         """ test onxx based utility to find mapping between onnx node names and io tensors"""
@@ -557,13 +567,32 @@ class TestOnnxUtils:
         for name in expected_node_names:
             assert name in actual_node_names
 
-        expected_param_names = ['conv1.weight', 'gn.bias', 'conv1.bias', 'gn.weight', 'bn.weight',
-                                'bn.running_mean', 'bn.bias', 'bn.running_var']
+        expected_param_names = {'conv1.weight', 'gn.bias', 'conv1.bias', 'gn.weight', 'bn.weight',
+                                'bn.running_mean', 'bn.bias', 'bn.running_var'}
         _, valid_param_set = onnx_utils.OnnxSaver.get_onnx_node_to_io_tensor_names_map(onnx_model)
         for name in expected_param_names:
             assert name in valid_param_set
 
         self.check_onnx_node_name_uniqueness(onnx_model)
+
+        # enable onnx simply
+        onnx_utils.simplify_onnx_model = True
+        with onnx_simply(True):
+            onnx_utils.OnnxSaver.set_node_names(onnx_path, model, dummy_input=torch.rand(1, 10, 24, 24),
+                                                is_conditional=False, module_marker_map={})
+        onnx_model = onnx.load(onnx_path)
+
+        actual_node_names = [node.name for node in onnx_model.graph.node]
+        for name in expected_node_names:
+            assert name in actual_node_names
+
+        params_names_removed = {'bn.running_mean', 'bn.running_var'}
+        _, valid_param_set = onnx_utils.OnnxSaver.get_onnx_node_to_io_tensor_names_map(onnx_model)
+        assert not params_names_removed.intersection(valid_param_set)
+        expected_param_names.difference_update(params_names_removed)
+        for name in expected_param_names:
+            assert name in valid_param_set
+
         if os.path.exists(onnx_path):
             os.remove(onnx_path)
 
@@ -643,6 +672,7 @@ class TestOnnxUtils:
             os.remove(onnx_path)
 
     def test_non_leaf_module_names(self):
+
         """
         Test that node names are uniquely set.
         """
@@ -679,6 +709,100 @@ class TestOnnxUtils:
         ]
         for node in onnx_model.graph.node:
             assert 'Constant' in node.name or node.name in expected_names
+
+        if os.path.exists(onnx_path):
+            os.remove(onnx_path)
+
+    def test_model_with_input_last_onnx_node(self):
+        """
+        Test that adversial case when the first input is feed to last node in onnx sub-graph
+        """
+
+        roi_model = RoiModel(height=7, width=7, scale=0.25)
+        x = torch.rand(1, 1, 6, 6)
+        rois = torch.tensor([ [0, -2.0, -2.0, 22.0, 22.0], ])
+        dummy_input = (x, rois)
+        onnx_utils.OnnxSaver.set_node_names('./data/roi.onnx', roi_model, dummy_input, is_conditional=False,
+                                            module_marker_map={},
+                                            onnx_export_args=(onnx_utils.OnnxExportApiArgs(opset_version=11))
+                                            )
+        onnx_model = onnx.load('./data/roi.onnx')
+        end_nodes = [ n.name for n in onnx_model.graph.node if 'end' in n.name]
+        assert len(end_nodes) == 1
+
+    def test_export_dict_input_output(self):
+        """ test dictionary input and output  layers"""
+
+
+        class Net(torch.nn.Module):
+            """
+            Model using multiply as functional and module at different depths
+            """
+            def __init__(self):
+                super().__init__()
+                self.layer = InputOutputDictModel()
+
+            def forward(self, x):
+                return self.layer(x)
+
+        model = Net()
+        dummy_input = {'a': torch.randn(1, 10, 10, 10),
+                       'b': torch.randn(1, 10, 10, 10),
+                       'c': torch.randn(1, 10, 10, 10)}
+        onnx_path = './data/MyModel.onnx'
+
+        torch.onnx.export(model, dummy_input, onnx_path)
+        onnx_utils.OnnxSaver.set_node_names(onnx_path, model, dummy_input)
+
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model)
+        self.check_onnx_node_name_uniqueness(onnx_model)
+
+        for node in onnx_model.graph.node:
+            assert node.name.startswith('layer')
+
+    def test_kwargs_input_dict_output(self):
+        """ test dictionary input as kwargs in an intermediate layer """
+
+        class KwargModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mul = aimet_torch.elementwise_ops.Multiply()
+
+            def forward(self, a, b, c):
+                ab = a * b
+                bc = b * c
+                ca = self.mul(c, a)
+
+                return {'ab': ab, 'bc': bc, 'ca': ca}
+
+        class Net(torch.nn.Module):
+            """
+            Model using multiply as functional and module at different depths
+            """
+            def __init__(self):
+                super().__init__()
+                self.layer = KwargModel()
+
+            def forward(self, x):
+                return self.layer(**x)
+
+        model = Net()
+
+        dummy_input = {'a': torch.randn(1, 10, 10, 10),
+                       'b': torch.randn(1, 10, 10, 10),
+                       'c': torch.randn(1, 10, 10, 10)}
+        onnx_path = './data/MyModel.onnx'
+
+        torch.onnx.export(model, dummy_input, onnx_path)
+        onnx_utils.OnnxSaver.set_node_names(onnx_path, model, dummy_input)
+
+        onnx_model = onnx.load(onnx_path)
+        onnx.checker.check_model(onnx_model)
+        self.check_onnx_node_name_uniqueness(onnx_model)
+
+        for node in onnx_model.graph.node:
+            assert node.name.startswith('layer')
 
         if os.path.exists(onnx_path):
             os.remove(onnx_path)

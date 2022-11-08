@@ -44,12 +44,12 @@ import json
 import logging
 import torch
 import torch.nn.functional as functional
-from torch.utils.data import Dataset, DataLoader
+from torchvision import models
 
 from aimet_common.utils import AimetLogger
 from aimet_common.defs import QuantScheme
 from aimet_common.quantsim import calculate_delta_offset
-from aimet_torch.utils import create_fake_data_loader, create_rand_tensors_given_shapes
+from aimet_torch.utils import create_fake_data_loader, create_rand_tensors_given_shapes, change_tensor_device_placement
 from aimet_torch.examples.test_models import TinyModel
 from aimet_torch.quantsim import QuantizationSimModel
 from aimet_torch.qc_quantize_op import StaticGridQuantWrapper, QcQuantizeOpMode
@@ -182,6 +182,7 @@ class TestAdaround:
 
     def test_apply_adaround(self):
         """ test apply_adaround end to end using tiny model """
+        torch.manual_seed(10)
         AimetLogger.set_level_for_all_areas(logging.DEBUG)
 
         # create fake data loader with image size (3, 32, 32)
@@ -198,7 +199,7 @@ class TestAdaround:
         params = AdaroundParameters(data_loader=data_loader, num_batches=4, default_num_iterations=5)
         ada_rounded_model = Adaround.apply_adaround(model, inp_tensor_list, params, './', 'dummy')
         out_after_ada = dummy_forward_pass(ada_rounded_model, input_shape)
-
+        print(out_after_ada.detach().cpu().numpy()[0, :])
         assert not torch.all(torch.eq(out_before_ada, out_after_ada))
 
         # Test export functionality
@@ -288,8 +289,8 @@ class TestAdaround:
         for quant_wrapper in sim.model.modules():
             if isinstance(quant_wrapper, StaticGridQuantWrapper):
                 # Adaround requires input and output quantizers to be disabled
-                quant_wrapper.input_quantizer.enabled = False
-                quant_wrapper.output_quantizer.enabled = False
+                for quantizer in quant_wrapper.input_quantizers + quant_wrapper.output_quantizers:
+                    quantizer.enabled = False
 
                 for name, param in quant_wrapper._module_to_wrap.named_parameters():
                     # Compute encodings for parameters, needed for initializing Adaround quantizers
@@ -603,7 +604,7 @@ class TestAdaround:
 
         # Skip the maxpool and avgpool layers.
         ignore_quant_ops_list = [model.maxpool, model.avgpool]
-        Adaround._skip_quantization_for_ops(model, sim, ignore_quant_ops_list)
+        Adaround._exclude_modules(model, sim, ignore_quant_ops_list)
         sim.compute_encodings(dummy_forward_pass, forward_pass_callback_args=input_shape)
 
         # Since maxpool and avgpool are skipped, they shouldn't be wrapped StaticGridQuantWrapper.
@@ -715,27 +716,105 @@ class TestAdaround:
         if os.path.exists("./dummy.encodings"):
             os.remove("./dummy.encodings")
 
-    def test_data_loader_format_check(self):
-        class _TernaryDataset(Dataset):
-            def __len__(self):
-                return 100
+    @pytest.mark.cuda
+    def test_apply_adaround_using_gpu(self):
+        """ test apply_adaround end to end using tiny model """
+        torch.manual_seed(10)
+        AimetLogger.set_level_for_all_areas(logging.DEBUG)
 
-            def __getitem__(self, *args, **kwargs):
-                return (0, 1, 2)
+        # create fake data loader with image size (3, 32, 32)
+        data_loader = create_fake_data_loader(dataset_size=64, batch_size=16, image_size=(3, 32, 32))
 
-        dataloader = DataLoader(_TernaryDataset())
+        net = TinyModel().eval()
+        model = net.to(torch.device('cuda'))
 
-        with pytest.raises(ValueError):
-            AdaroundParameters(dataloader, num_batches=100)
+        input_shape = (1, 3, 32, 32)
+        dummy_input = create_rand_tensors_given_shapes(input_shape)
+        dummy_input = change_tensor_device_placement(dummy_input, device=torch.device('cuda'))
+        out_before_ada = model(*dummy_input)
 
-        class _LengthOneDataset(Dataset):
-            def __len__(self):
-                return 1
+        params = AdaroundParameters(data_loader=data_loader, num_batches=4, default_num_iterations=1000)
+        ada_rounded_model = Adaround.apply_adaround(model, dummy_input, params, './', 'dummy')
+        out_after_ada = ada_rounded_model(*dummy_input)
 
-            def __getitem__(self, *args, **kwargs):
-                return (0, 1)
+        assert not torch.all(torch.eq(out_before_ada, out_after_ada))
 
-        dataloader = DataLoader(_LengthOneDataset())
+        # Test export functionality
+        with open('./dummy.encodings') as json_file:
+            encoding_data = json.load(json_file)
+            print(encoding_data)
 
-        with pytest.raises(ValueError):
-            AdaroundParameters(dataloader, num_batches=100)
+        param_keys = list(encoding_data.keys())
+        print(param_keys)
+        assert param_keys[0] == "conv1.weight"
+        assert isinstance(encoding_data["conv1.weight"], list)
+
+        # Delete encodings file
+        if os.path.exists("./dummy.encodings"):
+            os.remove("./dummy.encodings")
+
+    @pytest.mark.cuda
+    def test_apply_adaround_using_gpu_caching_disabled(self):
+        """ test apply_adaround end to end using tiny model """
+        torch.manual_seed(10)
+        AimetLogger.set_level_for_all_areas(logging.DEBUG)
+
+        # Disable caching activation data
+        from aimet_torch.adaround.adaround_optimizer import AdaroundOptimizer
+        def enable_caching_acts_data() -> bool:
+            """
+            Function to enable/disable caching intermediate activation data.
+            """
+            return False
+
+        AdaroundOptimizer.enable_caching_acts_data = enable_caching_acts_data
+
+        # create fake data loader with image size (3, 32, 32)
+        data_loader = create_fake_data_loader(dataset_size=64, batch_size=16, image_size=(3, 32, 32))
+
+        net = TinyModel().eval()
+        model = net.to(torch.device('cuda'))
+
+        input_shape = (1, 3, 32, 32)
+        dummy_input = create_rand_tensors_given_shapes(input_shape)
+        dummy_input = change_tensor_device_placement(dummy_input, device=torch.device('cuda'))
+        out_before_ada = model(*dummy_input)
+
+        params = AdaroundParameters(data_loader=data_loader, num_batches=4, default_num_iterations=5)
+        ada_rounded_model = Adaround.apply_adaround(model, dummy_input, params, './', 'dummy')
+        out_after_ada = ada_rounded_model(*dummy_input)
+
+        assert not torch.all(torch.eq(out_before_ada, out_after_ada))
+
+        # Test export functionality
+        with open('./dummy.encodings') as json_file:
+            encoding_data = json.load(json_file)
+            print(encoding_data)
+
+        param_keys = list(encoding_data.keys())
+        print(param_keys)
+        assert param_keys[0] == "conv1.weight"
+        assert isinstance(encoding_data["conv1.weight"], list)
+
+        # Delete encodings file
+        if os.path.exists("./dummy.encodings"):
+            os.remove("./dummy.encodings")
+
+    def test_adaround_with_modules_to_exclude(self):
+        """ test adaround API with modules_to_exclude list with both leaf and non-leaf modules """
+        model = models.resnet18().eval()
+        input_shape = (1, 3, 224, 224)
+        dummy_input = torch.randn(input_shape)
+        data_loader = create_fake_data_loader(dataset_size=64, batch_size=16, image_size=input_shape[1:])
+        params = AdaroundParameters(data_loader=data_loader, num_batches=4, default_num_iterations=5)
+        try:
+            _ = Adaround.apply_adaround(model, dummy_input, params, path='./', filename_prefix='resnet18',
+                                        ignore_quant_ops_list=[model.layer1, model.layer2, model.layer3,
+                                                               model.layer4, model.fc])
+            with open('./resnet18.encodings') as json_file:
+                encoding_data = json.load(json_file)
+
+            assert len(encoding_data) == 1 # Only model.conv1 layer is adarounded.
+        finally:
+            if os.path.exists("./resnet18.encodings"):
+                os.remove("./resnet18.encodings")

@@ -41,13 +41,14 @@ import abc
 import contextlib
 from enum import Enum
 from typing import Dict, Tuple, Union, List
+import os
 import torch
 from torch import nn
 
 import aimet_common.libpymo as libpymo
 from aimet_common.utils import AimetLogger
 from aimet_common.defs import QuantScheme, QuantizationDataType, MAP_ROUND_MODE_TO_PYMO
-from aimet_torch import custom_tensor_utils
+from aimet_torch.custom import custom_tensor_utils
 from aimet_torch import utils
 from aimet_torch.tensor_quantizer import StaticGridPerTensorQuantizer, StaticGridPerChannelQuantizer, TensorQuantizer, \
     LearnedGridTensorQuantizer, ParameterQuantizer
@@ -89,6 +90,7 @@ class QcQuantizeOpMode(Enum):
 
 QUANTIZER_TYPE_INPUT = 'input'
 QUANTIZER_TYPE_OUTPUT = 'output'
+TF_ENHANCED_USE_DOWNSAMPLING = bool(int(os.environ.get("AIMET_TFE_USE_DOWNSAMPLING", "0")))
 TF_ENHANCED_OFFSET_FACTOR = 0
 TF_ENHANCED_STRIDE_FACTOR = 2
 
@@ -103,9 +105,11 @@ def tensor_quantizer_factory(bitwidth: int, round_mode: str, quant_scheme: Quant
     :param quant_scheme: Quantization scheme (e.g. Range Learning)
     :param use_symmetric_encodings: True if symmetric encoding is used.  False otherwise.
     :param enabled_by_default: True if quantization of tensor is enabled.  False otherwise.
+    :param data_type: Quantization data_type to be used
     :return: An instance of StaticGridPerTensorQuantizer
     """
 
+    # TODO add way to pass extra parameters (e.g. FP8)
     if quant_scheme in (QuantScheme.post_training_tf_enhanced, QuantScheme.post_training_tf,
                         QuantScheme.post_training_percentile):
 
@@ -143,9 +147,6 @@ class QcQuantizeStandAloneBase(nn.Module):
                                                            is_symmetric,
                                                            enabled_by_default=True,
                                                            data_type=data_type)]
-        # Temporary to satisfy dependent code
-        # Todo: remove this once all dependent code has been cleaned up
-        self.output_quantizer = self.output_quantizers[0]
 
         self._mode = QcQuantizeOpMode.ANALYSIS
 
@@ -235,11 +236,11 @@ class QcQuantizeWrapper(nn.Module):
         """
         super(QcQuantizeWrapper, self).__init__()
 
-        if data_type == QuantizationDataType.float and weight_bw != 16:
-            raise ValueError('weight_bw=16 is the only supported configuration with floating point data type')
+        if data_type == QuantizationDataType.float and weight_bw not in [8, 16]:
+            raise ValueError('weight_bw in [8, 16] is the only supported configuration with floating point data type')
 
-        if data_type == QuantizationDataType.float and activation_bw != 16:
-            raise ValueError('activation_bw=16 is the only supported configuration with floating point data type')
+        if data_type == QuantizationDataType.float and activation_bw not in [8, 16]:
+            raise ValueError('activation_bw in [8, 16] is the only supported configuration with floating point data type')
 
         self.output_quantizers = [tensor_quantizer_factory(activation_bw, round_mode,
                                                            quant_scheme,
@@ -247,10 +248,6 @@ class QcQuantizeWrapper(nn.Module):
                                                            enabled_by_default=is_output_quantized,
                                                            data_type=data_type)
                                   for _ in range(num_outputs)]
-
-        # Temporary to satisfy dependent code
-        # Todo: remove this once all dependent code has been cleaned up
-        self.output_quantizer = self.output_quantizers[0]
 
         self._mode = QcQuantizeOpMode.ANALYSIS
         self._module_to_wrap = module_to_wrap
@@ -272,8 +269,9 @@ class QcQuantizeWrapper(nn.Module):
                                                           enabled_by_default=False,
                                                           data_type=data_type)
                                  for _ in range(num_inputs)]
-        self.input_quantizer = self.input_quantizers[0]
+
         self._quant_scheme = quant_scheme
+        self.supported_kernels = {}
 
     def get_named_parameters(self):
         """
@@ -619,17 +617,18 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
         :return: Quantized output from the wrapped module
         """
 
-        outputs = []
-        for index, input_tensor in enumerate(tensors_to_quantize):
-            assert len(tensor_quantizers) > index, \
-                f"Not enough tensor quantizers ({len(tensor_quantizers)}) allocated"
+        def inner_quantization(input_tensor, index):
+            if isinstance(input_tensor, (List, Tuple)):
+                inner_outputs = []
+                for inner_input in input_tensor:
+                    inner_outputs.append(inner_quantization(inner_input, index))
+                return inner_outputs
 
-            if isinstance(input_tensor, utils.dtypes_to_ignore_for_quantization) or\
-                    input_tensor.dtype in utils.torch_dtypes_to_ignore_for_quantization or\
+            if isinstance(input_tensor, utils.dtypes_to_ignore_for_quantization) or \
+                    input_tensor.dtype in utils.torch_dtypes_to_ignore_for_quantization or \
                     not tensor_quantizers[index].enabled:
                 # Do not quantize tensors of integer or bool data type or if the quantizer is disabled.
-                outputs.append(input_tensor)
-                continue
+                return input_tensor
 
             if not isinstance(input_tensor, torch.Tensor):
                 error_msg = f'Expecting quantize activation input of type torch.Tensor but got {type(input_tensor)}'
@@ -637,7 +636,7 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
                 raise AssertionError(error_msg)
 
             if self._mode is QcQuantizeOpMode.ANALYSIS:
-                if self._quant_scheme == QuantScheme.post_training_tf_enhanced:
+                if TF_ENHANCED_USE_DOWNSAMPLING and self._quant_scheme == QuantScheme.post_training_tf_enhanced:
                     # Update stats using downsampled output to speed up tf enhanced
                     input_tensor_flatten = input_tensor.reshape(-1)
                     downsampled_input = \
@@ -660,7 +659,14 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
             else:
                 output = input_tensor
 
-            outputs.append(output)
+            return output
+
+        outputs = []
+        for index, input_tensor in enumerate(tensors_to_quantize):
+            assert len(tensor_quantizers) > index, \
+                f"Not enough tensor quantizers ({len(tensor_quantizers)}) allocated"
+
+            outputs.append(inner_quantization(input_tensor, index))
 
         return outputs
 
@@ -685,6 +691,8 @@ class StaticGridQuantWrapper(QcQuantizeWrapper):
                                                                   enabled_by_default=param_quantizer.enabled,
                                                                   ch_axis=channel_axis,
                                                                   data_type=param_quantizer.data_type)
+            per_channel_quantizer.use_strict_symmetric = param_quantizer.use_strict_symmetric
+            per_channel_quantizer.use_unsigned_symmetric = param_quantizer.use_unsigned_symmetric
 
             new_param_quant_dict[param_name] = per_channel_quantizer
         self.param_quantizers = new_param_quant_dict
@@ -807,18 +815,24 @@ class LearnedGridQuantWrapper(QcQuantizeWrapper):
         self.apply_gating_logic()
 
         # Quantize inputs
-        quantized_inputs = self._quantize_activation(inputs, self.input_quantizers, 'input')
-        if isinstance(quantized_inputs, torch.Tensor):
-            quantized_inputs = [quantized_inputs]
+        torch_inputs = custom_tensor_utils.to_torch_tensor(inputs)
+        quantized_inputs = self._quantize_activation(torch_inputs, self.input_quantizers, 'input')
 
         with self._quantize_params(quantized_inputs):
+            quantized_inputs = custom_tensor_utils.to_custom_tensor(inputs, quantized_inputs)
             # Call the forward of the wrapped module
             wrapped_output = self._module_to_wrap(*quantized_inputs)
 
         # Quantize the outputs
-        if isinstance(wrapped_output, torch.Tensor):
+        if not isinstance(wrapped_output, (List, Tuple)):
             wrapped_output = [wrapped_output]
-        output = self._quantize_activation(wrapped_output, self.output_quantizers, 'output')
+
+        torch_outputs = custom_tensor_utils.to_torch_tensor(wrapped_output)
+        output = self._quantize_activation(torch_outputs, self.output_quantizers, 'output')
+        output = custom_tensor_utils.to_custom_tensor(wrapped_output, output)
+
+        if len(output) == 1:
+            output = output[0]
 
         return output
 
@@ -872,9 +886,6 @@ class LearnedGridQuantWrapper(QcQuantizeWrapper):
             encoding_max = getattr(self, type_of_quantizer + str(index) + '_encoding_max')
             quantized_tensors.append(tensor_quantizers[index].quantize_dequantize(tensor_to_quantize, encoding_min,
                                                                                   encoding_max))
-        # Flatten if there is only one output - which is by far the most common case
-        if len(quantized_tensors) == 1:
-            quantized_tensors = quantized_tensors[0]
         return quantized_tensors
 
 

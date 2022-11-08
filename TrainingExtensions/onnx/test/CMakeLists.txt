@@ -33,7 +33,6 @@
 #
 #  @@-COPYRIGHT-END-@@
 #==============================================================================
-cmake_minimum_required(VERSION 3.5)
 
 if (ENABLE_CUDA)
     add_test(OnnxTrainingExtensionTest
@@ -47,8 +46,6 @@ else (ENABLE_CUDA)
 
 endif (ENABLE_CUDA)
 
-set_property(TEST OnnxTrainingExtensionTest
-      APPEND PROPERTY ENVIRONMENT "${AIMET_LD_LIBRARY_PATH}")
 set_property(TEST OnnxTrainingExtensionTest
       APPEND PROPERTY ENVIRONMENT "${AIMET_PYTHONPATH}")
 

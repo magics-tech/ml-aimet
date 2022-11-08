@@ -38,8 +38,10 @@
 import unittest
 import os
 import pytest
+import random
 import torch
 import numpy as np
+import copy
 
 from aimet_torch.quantsim import QuantizationSimModel, load_checkpoint, save_checkpoint
 import aimet_torch.examples.mnist_torch_model as mnist_model
@@ -174,8 +176,83 @@ class QuantizationSimAcceptanceTests(unittest.TestCase):
         mnist_model.train(model=sim.model, epochs=1, num_batches=3,
                           batch_callback=check_if_layer_weights_are_updating, use_cuda=True)
 
+    @pytest.mark.cuda
+    def test_range_learning_for_qat_tf_init(self):
+        seed_all(42)
+        torch.cuda.empty_cache()
+        dummy_input = torch.randn(1, 1, 28, 28).cuda()
+
+        model = mnist_model.Net().to(torch.device(device="cuda"))
+        mnist_model.evaluate(model=model, iterations=None, use_cuda=True)
+
+        sim = QuantizationSimModel(model, quant_scheme=QuantScheme.training_range_learning_with_tf_init,
+                                   dummy_input=dummy_input)
+        sim.model.conv1.param_quantizers['bias'].enabled = True
+
+        # Quantize the untrained MNIST model
+        sim.compute_encodings(self.forward_pass, forward_pass_callback_args=5)
+        l1_w_min = copy.deepcopy(sim.model.conv1.weight_encoding_min.data)
+        l1_b_max = copy.deepcopy(sim.model.conv1.bias_encoding_max.data)
+        l2_w_min = copy.deepcopy(sim.model.conv2.weight_encoding_min.data)
+
+        sim.model.train()
+
+        mnist_model.train(sim.model, epochs=1, num_batches=100,
+                          batch_callback=check_if_layer_weights_are_updating, use_cuda=True)
+
+        # Checking if few parameters got updated
+        self.assertTrue(l1_w_min != sim.model.conv1.weight_encoding_min.data)
+        self.assertTrue(l1_b_max != sim.model.conv1.bias_encoding_max.data)
+        self.assertTrue(l2_w_min != sim.model.conv2.weight_encoding_min.data)
+
+        path = './data'
+        if not os.path.exists(path):
+            os.mkdir(path)
+        sim.export(path, 'mnist', dummy_input=dummy_input.cpu())
+
+    @pytest.mark.cuda
+    def test_range_learning_for_qat_tf_enhanced_init(self):
+        seed_all(42)
+        torch.cuda.empty_cache()
+        dummy_input = torch.randn(1, 1, 28, 28).cuda()
+
+        model = mnist_model.Net().to(torch.device(device="cuda"))
+        mnist_model.evaluate(model=model, iterations=None, use_cuda=True)
+
+        sim = QuantizationSimModel(model, quant_scheme=QuantScheme.training_range_learning_with_tf_enhanced_init,
+                                   dummy_input=dummy_input)
+        sim.model.conv1.param_quantizers['bias'].enabled = True
+
+        # Quantize the untrained MNIST model
+        sim.compute_encodings(self.forward_pass, forward_pass_callback_args=5)
+        l1_w_min = copy.deepcopy(sim.model.conv1.weight_encoding_min.data)
+        l1_b_max = copy.deepcopy(sim.model.conv1.bias_encoding_max.data)
+        l2_w_min = copy.deepcopy(sim.model.conv2.weight_encoding_min.data)
+
+        sim.model.train()
+
+        mnist_model.train(sim.model, epochs=1, num_batches=100,
+                          batch_callback=check_if_layer_weights_are_updating, use_cuda=True)
+
+        # Checking if few parameters got updated
+        self.assertTrue(l1_w_min != sim.model.conv1.weight_encoding_min.data)
+        self.assertTrue(l1_b_max != sim.model.conv1.bias_encoding_max.data)
+        self.assertTrue(l2_w_min != sim.model.conv2.weight_encoding_min.data)
+
     def test_dummy(self):
         # pytest has a 'feature' that returns an error code when all tests for a given suite are not selected
         # to be executed
         # So adding a dummy test to satisfy pytest
         pass
+
+
+def seed_all(seed=1029):
+    """ Setup seed """
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True

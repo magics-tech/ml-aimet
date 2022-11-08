@@ -46,6 +46,7 @@ from aimet_torch.qc_quantize_op import StaticGridQuantWrapper, LearnedGridQuantW
 from aimet_torch.examples.test_models import ModelWithTwoInputs, ModelWithTransposeConv
 from aimet_torch.qc_quantize_op import QuantScheme
 from aimet_torch.quantsim import QuantizationSimModel
+from aimet_torch.quantsim_straight_through_grad import calculate_forward_pass
 from aimet_torch.tensor_quantizer import StaticGridPerTensorQuantizer, StaticGridPerChannelQuantizer, \
     LearnedGridTensorQuantizer, ParameterQuantizer
 
@@ -197,7 +198,7 @@ class TestPerChannelQcQuantizeOpStaticGrid:
         model = ModelWithTwoInputs()
 
         sim = QuantizationSimModel(model, dummy_input=dummy_input)
-        for wrapper in sim.quant_wrappers():
+        for _, wrapper in sim.quant_wrappers():
             wrapper.enable_per_channel_quantization()
 
         assert isinstance(sim.model.conv1_a.param_quantizers['weight'], StaticGridPerChannelQuantizer)
@@ -305,7 +306,7 @@ class TestPerChannelQcQuantizeOpStaticGrid:
         model = ModelWithTwoInputs()
 
         sim = QuantizationSimModel(model, dummy_input=dummy_input)
-        for wrapper in sim.quant_wrappers():
+        for _, wrapper in sim.quant_wrappers():
             wrapper.enable_per_channel_quantization()
 
         assert isinstance(sim.model.conv1_a.param_quantizers['weight'], StaticGridPerChannelQuantizer)
@@ -340,7 +341,7 @@ class TestPerChannelQcQuantizeOpStaticGrid:
         sim = QuantizationSimModel(model, dummy_input=dummy_input, default_output_bw=16, default_param_bw=16,
                                    default_data_type=QuantizationDataType.float)
 
-        for wrapper in sim.quant_wrappers():
+        for _, wrapper in sim.quant_wrappers():
             wrapper.enable_per_channel_quantization()
 
         assert isinstance(sim.model.conv1_a.param_quantizers['weight'], StaticGridPerChannelQuantizer)
@@ -371,7 +372,7 @@ class TestPerChannelQcQuantizeOpStaticGrid:
         model = ModelWithTransposeConv()
 
         sim = QuantizationSimModel(model, dummy_input=dummy_input)
-        for wrapper in sim.quant_wrappers():
+        for _, wrapper in sim.quant_wrappers():
             wrapper.enable_per_channel_quantization()
 
         assert isinstance(sim.model.conv1_a.param_quantizers['weight'], StaticGridPerChannelQuantizer)
@@ -484,9 +485,9 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
         loss = quant_dequantized_output.sum()
         loss.backward()
         optimizer.step()
-        assert encoding_min.grad is not None
+        assert encoding_min.grad is None
         assert encoding_max.grad is not None
-        assert len(encoding_min.grad) == len(encoding_max) == len(encoding_min) == len(encoding_max.grad)
+        assert len(encoding_max) == len(encoding_max.grad)
 
 
     def test_replacement_of_wrapper(self):
@@ -504,8 +505,8 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
             encoding.bw, encoding.max, encoding.min, encoding.delta, encoding.offset = 8, 3, -2, 1, 0.2
             encodings.append(encoding)
 
-        post_training_module.input_quantizer.enabled = True
-        post_training_module.input_quantizer.encoding = encodings[0]
+        post_training_module.input_quantizers[0].enabled = True
+        post_training_module.input_quantizers[0].encoding = encodings[0]
         post_training_module.param_quantizers['weight'].enabled = True
         post_training_module.param_quantizers['weight'].encoding = encodings
         post_training_module.param_quantizers['bias'].enabled = False
@@ -515,8 +516,8 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
         # sim.model.conv1.input_quantizer.enabled = True
         trainable_module = sim._construct_and_initialize_trainable_wrapper(post_training_module, device='cpu')
 
-        assert trainable_module.output_quantizer.use_symmetric_encodings == False
-        assert trainable_module.output_quantizer.enabled == False
+        assert trainable_module.output_quantizers[0].use_symmetric_encodings == False
+        assert trainable_module.output_quantizers[0].enabled == False
         assert trainable_module.input0_encoding_min.item() == -2.0
         assert isinstance(trainable_module.param_quantizers['weight'].encoding, list)
 
@@ -530,13 +531,13 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
             encoding.bw, encoding.max, encoding.min, encoding.delta, encoding.offset = 8, -3, 2, 1, 0.2
             encodings.append(encoding)
 
-        wrapper.output_quantizer.encoding = encodings[0]
-        wrapper.input_quantizer.enabled = False
+        wrapper.output_quantizers[0].encoding = encodings[0]
+        wrapper.input_quantizers[0].enabled = False
         wrapper.param_quantizers['weight'].encoding = encodings
         wrapper.param_quantizers['bias'].enabled = False
         wrapper.apply_gating_logic()
-        assert wrapper.output_quantizer.encoding.min == 0.0
-        assert abs(wrapper.output_quantizer.encoding.max - 1e-5) < 1e-6
+        assert wrapper.output_quantizers[0].encoding.min == 0.0
+        assert abs(wrapper.output_quantizers[0].encoding.max - 1e-5) < 1e-6
         for enc in wrapper.param_quantizers['weight'].encoding:
             assert enc.min == 0.0
             assert abs(enc.max - 1e-5) < 1e-6
@@ -561,8 +562,9 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
 
         tensor = torch.ones((3, 1, 1, 2)).to('cuda')
         grad = torch.randn(3, 1, 1, 2).to('cuda')
-        enc_min_grad, enc_max_grad = ParameterQuantizer.compute_gradients(tensor, wrapper.param_quantizers['weight'],
-                                                                          grad)
+        _, intermediate_result = calculate_forward_pass(tensor, param_quantizer, encoding_min, encoding_max)
+        enc_min_grad, enc_max_grad = ParameterQuantizer.compute_gradients(tensor, grad, intermediate_result,
+                                                                          param_quantizer.channel_axis)
 
         assert len(enc_min_grad) == len(enc_max_grad) == 3
         assert torch.all(torch.eq(enc_max_grad, -enc_min_grad))
@@ -581,8 +583,8 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
 
         tensor = torch.ones(3).to('cuda')
         grad = torch.randn(3).to('cuda')
-        enc_min_grad, enc_max_grad = ParameterQuantizer.compute_gradients(tensor, param_quantizer,
-                                                                          grad)
+        _, intermediate_result = calculate_forward_pass(tensor, param_quantizer, encoding_min, encoding_max)
+        enc_min_grad, enc_max_grad = ParameterQuantizer.compute_gradients(tensor, grad, intermediate_result, param_quantizer.channel_axis)
 
         assert len(enc_min_grad) == len(enc_max_grad) == 3
         assert torch.all(torch.eq(enc_max_grad, -enc_min_grad))
@@ -597,7 +599,7 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
             encoding = libpymo.TfEncoding()
             encoding.bw, encoding.max, encoding.min, encoding.delta, encoding.offset = 8, 3, -2, 1, 0.2
             encodings.append(encoding)
-        trainable_module.input_quantizer.enabled = False
+        trainable_module.input_quantizers[0].enabled = False
         # trainable_module.input_quantizer.encoding = encodings[0]
 
         trainable_module.param_quantizers['weight'].enabled = True
@@ -605,8 +607,8 @@ class TestPerChannelQcQuantizeOpLearnedGrid:
         trainable_module.param_quantizers['bias'].enabled = True
         trainable_module.param_quantizers['bias'].encoding = encodings
 
-        trainable_module.output_quantizer.enabled = True
-        trainable_module.output_quantizer.encoding = encodings[0]
+        trainable_module.output_quantizers[0].enabled = True
+        trainable_module.output_quantizers[0].encoding = encodings[0]
 
         inp = torch.rand((1, 2, 5, 5), requires_grad=True).to('cuda')
         out = trainable_module(inp)
