@@ -1,4 +1,18 @@
-# Test
+# ml-aimet4tesla
+
+## Feature added for PyTorch model
+1. Add the ***Floor*** rounding scheme. You can choose **floor**, **nearest** or **stochastic** for the rounding mode. It can be run on both CPU and GPU.
+4. Add the ***POW 2*** constrain for scaling factors. The Scaling factors of ***weight***, ***input*** and ***output*** are forced to be ***2^n***. You can choose **pow2** or **ori** for the scaling mode.
+```
+sim = QuantizationSimModel(model_int8, rounding_mode='floor', scaling_mode='pow2', dummy_input=dummy_input, **kwargs)
+```
+
+## How to compile
+Follow the instruction from the original AIMET github (https://github.com/quic/aimet/blob/develop/packaging/docker_install.md). Here we use Docker in order to have root.
+
+1. Create a Docker image with all the dependency files. You can use the recipes from AIMET github (https://github.com/quic/aimet/tree/develop/Jenkins). 
+2. Follow the instruction from **Build code and install** to **Setup the path**.
+
 
 ![Qualcomm Innovation Center, Inc.](Docs/images/logo-quic-on@h68.png)
 
